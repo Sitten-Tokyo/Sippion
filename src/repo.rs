@@ -196,6 +196,12 @@ struct SourceStamp {
     ctime_nsec: i64,
     #[cfg(unix)]
     nlink: u64,
+    #[cfg(windows)]
+    volume_serial_number: Option<u64>,
+    #[cfg(windows)]
+    file_index: Option<u64>,
+    #[cfg(windows)]
+    last_write_time: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,7 +214,7 @@ struct RootIdentity {
     volume_serial_number: u64,
     #[cfg(windows)]
     file_index: u64,
-    #[cfg(all(not(unix), not(windows)))]
+    #[cfg(not(unix))]
     created_nanos: Option<u128>,
 }
 
@@ -547,7 +553,7 @@ impl RepositoryAccess {
         if metadata.len() > MAX_SOURCE_BYTES as u64 {
             return Err(RepositoryAccessError::TooLarge);
         }
-        Ok(cap_source_stamp(&metadata))
+        cap_source_stamp(&file, &metadata)
     }
 
     fn open_file_nofollow(
@@ -767,7 +773,7 @@ impl RepositoryAccess {
         if before.len() > MAX_SOURCE_BYTES as u64 {
             return Err((RepositoryAccessError::TooLarge, 0));
         }
-        let before_stamp = cap_source_stamp(&before);
+        let before_stamp = cap_source_stamp(&file, &before).map_err(|error| (error, 0))?;
 
         // Never trust metadata length as a memory bound: a concurrently growing regular file could
         // otherwise make an unbounded read allocate beyond MAX_SOURCE_BYTES.
@@ -787,7 +793,7 @@ impl RepositoryAccess {
         let after = file
             .metadata()
             .map_err(|error| (map_io(error), source_bytes))?;
-        let after_stamp = cap_source_stamp(&after);
+        let after_stamp = cap_source_stamp(&file, &after).map_err(|error| (error, source_bytes))?;
         if file_has_multiple_hard_links(&file, &after).map_err(|error| (error, source_bytes))?
             || before_stamp != after_stamp
             || source_bytes as u64 != after.len()
@@ -2615,16 +2621,25 @@ fn source_stamp(metadata: &std::fs::Metadata) -> SourceStamp {
             nlink: metadata.nlink(),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(all(not(unix), not(windows)))]
     {
         SourceStamp {
             len: metadata.len(),
             modified_nanos,
+            #[cfg(windows)]
+            volume_serial_number: None,
+            #[cfg(windows)]
+            file_index: None,
+            #[cfg(windows)]
+            last_write_time: None,
         }
     }
 }
 
-fn cap_source_stamp(metadata: &cap_std::fs::Metadata) -> SourceStamp {
+fn cap_source_stamp(
+    _file: &cap_std::fs::File,
+    metadata: &cap_std::fs::Metadata,
+) -> Result<SourceStamp, RepositoryAccessError> {
     let modified_nanos = metadata
         .modified()
         .ok()
@@ -2638,7 +2653,7 @@ fn cap_source_stamp(metadata: &cap_std::fs::Metadata) -> SourceStamp {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        SourceStamp {
+        Ok(SourceStamp {
             len: metadata.len(),
             modified_nanos,
             dev: metadata.dev(),
@@ -2646,14 +2661,32 @@ fn cap_source_stamp(metadata: &cap_std::fs::Metadata) -> SourceStamp {
             ctime: metadata.ctime(),
             ctime_nsec: metadata.ctime_nsec(),
             nlink: metadata.nlink(),
-        }
+        })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        SourceStamp {
+        let std_file = _file.try_clone().map_err(map_io)?.into_std();
+        let information = winapi_util::file::information(&std_file).map_err(map_io)?;
+        Ok(SourceStamp {
+            len: metadata.len(),
+            modified_nanos: None,
+            volume_serial_number: Some(information.volume_serial_number()),
+            file_index: Some(information.file_index()),
+            last_write_time: information.last_write_time(),
+        })
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        Ok(SourceStamp {
             len: metadata.len(),
             modified_nanos,
-        }
+            #[cfg(windows)]
+            volume_serial_number: None,
+            #[cfg(windows)]
+            file_index: None,
+            #[cfg(windows)]
+            last_write_time: None,
+        })
     }
 }
 
