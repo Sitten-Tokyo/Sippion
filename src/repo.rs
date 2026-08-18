@@ -214,7 +214,7 @@ struct RootIdentity {
     volume_serial_number: u64,
     #[cfg(windows)]
     file_index: u64,
-    #[cfg(not(unix))]
+    #[cfg(all(not(unix), not(windows)))]
     created_nanos: Option<u128>,
 }
 
@@ -2603,6 +2603,7 @@ fn root_identity_from_dir(directory: &Dir) -> Result<RootIdentity, RepositoryAcc
 }
 
 fn source_stamp(metadata: &std::fs::Metadata) -> SourceStamp {
+    #[cfg(not(windows))]
     let modified_nanos = metadata
         .modified()
         .ok()
@@ -2621,17 +2622,25 @@ fn source_stamp(metadata: &std::fs::Metadata) -> SourceStamp {
             nlink: metadata.nlink(),
         }
     }
+    #[cfg(windows)]
+    {
+        SourceStamp {
+            len: metadata.len(),
+            modified_nanos: metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos()),
+            volume_serial_number: None,
+            file_index: None,
+            last_write_time: None,
+        }
+    }
     #[cfg(all(not(unix), not(windows)))]
     {
         SourceStamp {
             len: metadata.len(),
             modified_nanos,
-            #[cfg(windows)]
-            volume_serial_number: None,
-            #[cfg(windows)]
-            file_index: None,
-            #[cfg(windows)]
-            last_write_time: None,
         }
     }
 }
@@ -2640,6 +2649,7 @@ fn cap_source_stamp(
     _file: &cap_std::fs::File,
     metadata: &cap_std::fs::Metadata,
 ) -> Result<SourceStamp, RepositoryAccessError> {
+    #[cfg(not(windows))]
     let modified_nanos = metadata
         .modified()
         .ok()
@@ -2680,12 +2690,6 @@ fn cap_source_stamp(
         Ok(SourceStamp {
             len: metadata.len(),
             modified_nanos,
-            #[cfg(windows)]
-            volume_serial_number: None,
-            #[cfg(windows)]
-            file_index: None,
-            #[cfg(windows)]
-            last_write_time: None,
         })
     }
 }
