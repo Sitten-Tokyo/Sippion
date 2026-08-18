@@ -39,6 +39,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.85.0
