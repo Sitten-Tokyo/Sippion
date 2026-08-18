@@ -696,11 +696,20 @@ impl RepositoryAccess {
                 }
             };
             let metadata = entry.metadata().ok();
+            if metadata.as_ref().is_some_and(policy_excluded_by_metadata) {
+                policy_excluded_files = policy_excluded_files.saturating_add(1);
+                continue;
+            }
+            // On Windows, the ignore-walker's ambient metadata and cap-std's verified metadata
+            // can expose different timestamp precision. Use the same capability-checked stamp
+            // used by read_source so unchanged files remain reusable across searches.
+            #[cfg(windows)]
+            let stamp = self.verified_metadata_stamp(&normalized).ok();
+            #[cfg(not(windows))]
             let stamp = metadata.as_ref().map(source_stamp);
-            if metadata.as_ref().is_some_and(policy_excluded_by_metadata)
-                || stamp
-                    .as_ref()
-                    .is_some_and(|current| policy_skips.get(&normalized) == Some(current))
+            if stamp
+                .as_ref()
+                .is_some_and(|current| policy_skips.get(&normalized) == Some(current))
             {
                 policy_excluded_files = policy_excluded_files.saturating_add(1);
                 continue;
