@@ -123,6 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
             --verify-tag \
             --draft \
             --title "Sippion ${{ inputs.tag }}" \
