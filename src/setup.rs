@@ -1,0 +1,675 @@
+use std::env;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{Value, json};
+
+const SERVER_NAME: &str = "sippion";
+const MANAGED_BEGIN: &str = "# BEGIN SIPPION MANAGED CONFIG";
+const MANAGED_END: &str = "# END SIPPION MANAGED CONFIG";
+const RULE_BEGIN: &str = "<!-- BEGIN SIPPION MANAGED RULE -->";
+const RULE_END: &str = "<!-- END SIPPION MANAGED RULE -->";
+
+const DISCOVERY_RULE: &str = "When repository understanding or search is required, call the Sippion repo_context tool before broad recursive searches or reading many files. Keep Sippion read-only and scoped to the current project root. If Sippion is unavailable, do not claim it was used; fall back to native tools.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileChange {
+    Unchanged,
+    Updated,
+}
+
+#[derive(Debug)]
+struct SetupReport {
+    name: &'static str,
+    config: Result<FileChange, String>,
+    rules: Result<FileChange, String>,
+}
+
+pub fn run_setup() -> Result<(), String> {
+    let executable = installed_executable()?;
+    let home = home_dir()?;
+
+    let reports = vec![
+        SetupReport {
+            name: "Codex",
+            config: setup_codex(&home, &executable),
+            rules: setup_rules(&home.join(".codex").join("AGENTS.md")),
+        },
+        SetupReport {
+            name: "Claude Code",
+            config: setup_claude(&home, &executable),
+            rules: setup_rules(&home.join(".claude").join("CLAUDE.md")),
+        },
+        SetupReport {
+            name: "Antigravity",
+            config: setup_antigravity(&home, &executable),
+            rules: setup_rules(&home.join(".gemini").join("GEMINI.md")),
+        },
+    ];
+
+    let mut failures = Vec::new();
+    for report in &reports {
+        print_report(report);
+        if let Err(error) = &report.config {
+            failures.push(format!("{} MCP config: {error}", report.name));
+        }
+        if let Err(error) = &report.rules {
+            failures.push(format!("{} global rule: {error}", report.name));
+        }
+    }
+
+    println!();
+    println!("Sippion setup completed for the current user.");
+    println!("Restart Codex, Claude Code, and Antigravity to reload MCP settings.");
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("setup incomplete: {}", failures.join("; ")))
+    }
+}
+
+pub fn run_doctor() -> Result<(), String> {
+    let executable = installed_executable()?;
+    let home = home_dir()?;
+    println!("Sippion {}", crate::core::VERSION);
+    println!("binary: {}", executable.display());
+    println!();
+
+    check_codex(&home, &executable);
+    check_claude(&home, &executable);
+    check_antigravity(&home, &executable);
+    check_rule(&home.join(".codex").join("AGENTS.md"), "Codex");
+    check_rule(&home.join(".claude").join("CLAUDE.md"), "Claude Code");
+    check_rule(&home.join(".gemini").join("GEMINI.md"), "Antigravity");
+    Ok(())
+}
+
+pub fn run_uninstall() -> Result<(), String> {
+    let home = home_dir()?;
+    let mut failures = Vec::new();
+
+    for (name, path, kind) in [
+        (
+            "Codex MCP config",
+            home.join(".codex").join("config.toml"),
+            UninstallKind::Codex,
+        ),
+        (
+            "Claude Code MCP config",
+            home.join(".claude.json"),
+            UninstallKind::Json,
+        ),
+        (
+            "Antigravity MCP config",
+            home.join(".gemini").join("config").join("mcp_config.json"),
+            UninstallKind::Json,
+        ),
+    ] {
+        let result = match kind {
+            UninstallKind::Codex => remove_codex(&path),
+            UninstallKind::Json => remove_json_server(&path),
+        };
+        match result {
+            Ok(FileChange::Updated) => println!("{name}: removed"),
+            Ok(FileChange::Unchanged) => println!("{name}: not present"),
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+
+    for (name, path) in [
+        ("Codex global rule", home.join(".codex").join("AGENTS.md")),
+        (
+            "Claude Code global rule",
+            home.join(".claude").join("CLAUDE.md"),
+        ),
+        (
+            "Antigravity global rule",
+            home.join(".gemini").join("GEMINI.md"),
+        ),
+    ] {
+        match remove_marked_block(&path, RULE_BEGIN, RULE_END) {
+            Ok(FileChange::Updated) => println!("{name}: removed"),
+            Ok(FileChange::Unchanged) => println!("{name}: not present"),
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+
+    if failures.is_empty() {
+        println!(
+            "Sippion client configuration removed. The Sippion binary itself was not deleted."
+        );
+        Ok(())
+    } else {
+        Err(format!("uninstall incomplete: {}", failures.join("; ")))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UninstallKind {
+    Codex,
+    Json,
+}
+
+fn setup_codex(home: &Path, executable: &Path) -> Result<FileChange, String> {
+    let path = home.join(".codex").join("config.toml");
+    let executable = executable_string(executable)?;
+    let block = format!(
+        "{MANAGED_BEGIN}\n[mcp_servers.sippion]\ncommand = {}\nargs = [\"mcp\", \"--root\", \".\"]\ncwd = \".\"\nenabled_tools = [\"repo_context\"]\n{MANAGED_END}\n",
+        toml_string(&executable)
+    );
+    let current = read_optional_text(&path)?;
+    let next = upsert_codex_block(current.as_deref().unwrap_or(""), &block);
+    write_text_if_changed(&path, &next)
+}
+
+fn remove_codex(path: &Path) -> Result<FileChange, String> {
+    let Some(current) = read_optional_text(path)? else {
+        return Ok(FileChange::Unchanged);
+    };
+    if current.contains(MANAGED_BEGIN) {
+        let next = remove_block(&current, MANAGED_BEGIN, MANAGED_END);
+        return write_text_if_changed(path, &next);
+    }
+    let Some(start) = find_codex_table_start(&current) else {
+        return Ok(FileChange::Unchanged);
+    };
+    let end = find_next_toml_table(&current, start).unwrap_or(current.len());
+    let section = &current[start..end];
+    let command_is_sippion = section
+        .lines()
+        .find_map(|line| line.strip_prefix("command = "))
+        .is_some_and(|value| value.contains("sippion"));
+    if !command_is_sippion || !section.contains("args = [\"mcp\", \"--root\"") {
+        return Ok(FileChange::Unchanged);
+    }
+    let mut next = String::with_capacity(current.len());
+    next.push_str(&current[..start]);
+    next.push_str(&current[end..]);
+    write_text_if_changed(path, &next)
+}
+
+fn setup_claude(home: &Path, executable: &Path) -> Result<FileChange, String> {
+    let path = home.join(".claude.json");
+    let entry = json!({
+        "type": "stdio",
+        "command": executable_string(executable)?,
+        "args": ["mcp", "--root", "."],
+        "cwd": "."
+    });
+    upsert_json_server(&path, entry)
+}
+
+fn setup_antigravity(home: &Path, executable: &Path) -> Result<FileChange, String> {
+    let path = home.join(".gemini").join("config").join("mcp_config.json");
+    let entry = json!({
+        "command": executable_string(executable)?,
+        "args": ["mcp", "--root", "."],
+        "cwd": "."
+    });
+    upsert_json_server(&path, entry)
+}
+
+fn setup_rules(path: &Path) -> Result<FileChange, String> {
+    let block = format!(
+        "{RULE_BEGIN}\n# Sippion repository discovery\n#\n# {DISCOVERY_RULE}\n{RULE_END}\n"
+    );
+    let current = read_optional_text(path)?;
+    let next = upsert_marked_block(
+        current.as_deref().unwrap_or(""),
+        RULE_BEGIN,
+        RULE_END,
+        &block,
+    );
+    write_text_if_changed(path, &next)
+}
+
+fn upsert_codex_block(current: &str, block: &str) -> String {
+    if current.contains(MANAGED_BEGIN) {
+        return replace_marked_block(current, MANAGED_BEGIN, MANAGED_END, block);
+    }
+    if let Some(start) = find_codex_table_start(current) {
+        let end = find_next_toml_table(current, start).unwrap_or(current.len());
+        let mut next = String::with_capacity(current.len() + block.len());
+        next.push_str(&current[..start]);
+        next.push_str(block);
+        next.push_str(&current[end..]);
+        return next;
+    }
+    append_block(current, block)
+}
+
+fn find_codex_table_start(current: &str) -> Option<usize> {
+    current
+        .lines()
+        .scan(0usize, |offset, line| {
+            let start = *offset;
+            *offset += line.len() + 1;
+            Some((start, line))
+        })
+        .find_map(|(start, line)| (line.trim() == "[mcp_servers.sippion]").then_some(start))
+}
+
+fn find_next_toml_table(current: &str, start: usize) -> Option<usize> {
+    let rest = &current[start..];
+    let first_line_len = rest.lines().next().map_or(0, |line| line.len() + 1);
+    rest.lines()
+        .skip(1)
+        .scan(start + first_line_len, |offset, line| {
+            let line_start = *offset;
+            *offset += line.len() + 1;
+            Some((line_start, line))
+        })
+        .find_map(|(line_start, line)| line.trim_start().starts_with('[').then_some(line_start))
+}
+
+fn upsert_marked_block(current: &str, begin: &str, end: &str, block: &str) -> String {
+    if current.contains(begin) {
+        replace_marked_block(current, begin, end, block)
+    } else {
+        append_block(current, block)
+    }
+}
+
+fn replace_marked_block(current: &str, begin: &str, end: &str, block: &str) -> String {
+    let Some(start) = current.find(begin) else {
+        return append_block(current, block);
+    };
+    let Some(end_offset) = current[start..].find(end) else {
+        return append_block(current, block);
+    };
+    let mut end = start + end_offset + end.len();
+    if current.as_bytes().get(end) == Some(&b'\r') {
+        end += 1;
+    }
+    if current.as_bytes().get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    let mut next = String::with_capacity(current.len() + block.len());
+    next.push_str(&current[..start]);
+    next.push_str(block);
+    next.push_str(&current[end..]);
+    next
+}
+
+fn remove_marked_block(path: &Path, begin: &str, end: &str) -> Result<FileChange, String> {
+    let Some(current) = read_optional_text(path)? else {
+        return Ok(FileChange::Unchanged);
+    };
+    if !current.contains(begin) {
+        return Ok(FileChange::Unchanged);
+    }
+    let next = remove_block(&current, begin, end);
+    write_text_if_changed(path, &next)
+}
+
+fn remove_block(current: &str, begin: &str, end: &str) -> String {
+    let Some(start) = current.find(begin) else {
+        return current.to_string();
+    };
+    let Some(end_offset) = current[start..].find(end) else {
+        return current.to_string();
+    };
+    let mut end = start + end_offset + end.len();
+    while matches!(current.as_bytes().get(end), Some(b'\r' | b'\n')) {
+        end += 1;
+    }
+    let mut next = String::with_capacity(current.len());
+    next.push_str(&current[..start]);
+    next.push_str(&current[end..]);
+    next
+}
+
+fn append_block(current: &str, block: &str) -> String {
+    if current.is_empty() {
+        return block.to_string();
+    }
+    let separator = if current.ends_with('\n') { "" } else { "\n" };
+    format!("{current}{separator}{block}")
+}
+
+fn upsert_json_server(path: &Path, entry: Value) -> Result<FileChange, String> {
+    let mut root = match read_optional_json(path)? {
+        Some(value) => value,
+        None => json!({}),
+    };
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| format!("{} must contain a JSON object", path.display()))?;
+    let servers = object
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| format!("{} mcpServers must be a JSON object", path.display()))?;
+    if servers.get(SERVER_NAME) == Some(&entry) {
+        return Ok(FileChange::Unchanged);
+    }
+    servers.insert(SERVER_NAME.to_string(), entry);
+    write_json_if_changed(path, &root)
+}
+
+fn remove_json_server(path: &Path) -> Result<FileChange, String> {
+    let Some(mut root) = read_optional_json(path)? else {
+        return Ok(FileChange::Unchanged);
+    };
+    let Some(object) = root.as_object_mut() else {
+        return Err(format!("{} must contain a JSON object", path.display()));
+    };
+    let Some(servers) = object.get_mut("mcpServers").and_then(Value::as_object_mut) else {
+        return Ok(FileChange::Unchanged);
+    };
+    if !servers.get(SERVER_NAME).is_some_and(is_sippion_json_entry) {
+        return Ok(FileChange::Unchanged);
+    }
+    servers.remove(SERVER_NAME);
+    write_json_if_changed(path, &root)
+}
+
+fn is_sippion_json_entry(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let command = object.get("command").and_then(Value::as_str).unwrap_or("");
+    let first_arg = object
+        .get("args")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    command
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name == "sippion" || name == "sippion.exe")
+        && first_arg == "mcp"
+}
+
+fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
+
+fn read_optional_json(path: &Path) -> Result<Option<Value>, String> {
+    let Some(contents) = read_optional_text(path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&contents)
+        .map(Some)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))
+}
+
+fn write_text_if_changed(path: &Path, contents: &str) -> Result<FileChange, String> {
+    if read_optional_text(path)?.as_deref() == Some(contents) {
+        return Ok(FileChange::Unchanged);
+    }
+    write_bytes_with_backup(path, contents.as_bytes())
+}
+
+fn write_json_if_changed(path: &Path, value: &Value) -> Result<FileChange, String> {
+    let contents = serde_json::to_string_pretty(value).map_err(|error| error.to_string())? + "\n";
+    write_text_if_changed(path, &contents)
+}
+
+fn write_bytes_with_backup(path: &Path, contents: &[u8]) -> Result<FileChange, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    if path.exists() {
+        backup_once(path)?;
+    }
+    let temporary = temporary_path(path);
+    fs::write(&temporary, contents)
+        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    if let Err(rename_error) = fs::rename(&temporary, path) {
+        #[cfg(windows)]
+        {
+            fs::remove_file(path).map_err(|error| {
+                format!(
+                    "cannot replace {} after rename failure ({rename_error}): {error}",
+                    path.display()
+                )
+            })?;
+            fs::rename(&temporary, path).map_err(|error| {
+                format!(
+                    "cannot install {} after rename failure: {error}",
+                    path.display()
+                )
+            })?;
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot install {}: {rename_error}", path.display()));
+        }
+    }
+    Ok(FileChange::Updated)
+}
+
+fn backup_once(path: &Path) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("cannot create a backup for {}", path.display()))?;
+    let backup = path.with_file_name(format!("{name}.sippion-backup"));
+    if !backup.exists() {
+        fs::copy(path, &backup)
+            .map_err(|error| format!("cannot create backup {}: {error}", backup.display()))?;
+    }
+    Ok(())
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let name = path.file_name().map_or_else(
+        || "sippion-config".to_string(),
+        |value| value.to_string_lossy().into_owned(),
+    );
+    path.with_file_name(format!("{name}.sippion-{nonce}.tmp"))
+}
+
+fn installed_executable() -> Result<PathBuf, String> {
+    let path =
+        env::current_exe().map_err(|error| format!("cannot locate Sippion executable: {error}"))?;
+    fs::canonicalize(&path).or(Ok(path))
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        if let Some(path) = env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(path));
+        }
+        if let (Some(drive), Some(path)) = (env::var_os("HOMEDRIVE"), env::var_os("HOMEPATH")) {
+            let mut home = PathBuf::from(drive);
+            home.push(path);
+            return Ok(home);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(path) = env::var_os("HOME") {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err("cannot determine the current user's home directory".to_string())
+}
+
+fn executable_string(path: &Path) -> Result<String, String> {
+    path.to_str().map(ToOwned::to_owned).ok_or_else(|| {
+        format!(
+            "Sippion executable path is not valid Unicode: {}",
+            path.display()
+        )
+    })
+}
+
+fn toml_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", character as u32))
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn print_report(report: &SetupReport) {
+    println!("{}", report.name);
+    print_result("  MCP config", &report.config);
+    print_result("  global rule", &report.rules);
+}
+
+fn print_result(label: &str, result: &Result<FileChange, String>) {
+    match result {
+        Ok(FileChange::Unchanged) => println!("{label}: ready"),
+        Ok(FileChange::Updated) => println!("{label}: configured"),
+        Err(error) => println!("{label}: ERROR ({error})"),
+    }
+}
+
+fn check_codex(home: &Path, executable: &Path) {
+    let path = home.join(".codex").join("config.toml");
+    match read_optional_text(&path) {
+        Ok(Some(contents)) => {
+            if !contents.contains("[mcp_servers.sippion]") {
+                println!("Codex MCP config: MISSING");
+                return;
+            }
+            let command = executable_string(executable).unwrap_or_default();
+            let ok = contents.contains("[mcp_servers.sippion]")
+                && contents.contains(&toml_string(&command));
+            println!("Codex MCP config: {}", if ok { "OK" } else { "MISMATCH" });
+        }
+        Ok(None) => println!("Codex MCP config: MISSING"),
+        Err(error) => println!("Codex MCP config: ERROR ({error})"),
+    }
+}
+
+fn check_claude(home: &Path, executable: &Path) {
+    check_json_server(
+        &home.join(".claude.json"),
+        executable,
+        "Claude Code MCP config",
+        true,
+    );
+}
+
+fn check_antigravity(home: &Path, executable: &Path) {
+    check_json_server(
+        &home.join(".gemini").join("config").join("mcp_config.json"),
+        executable,
+        "Antigravity MCP config",
+        false,
+    );
+}
+
+fn check_json_server(path: &Path, executable: &Path, label: &str, claude: bool) {
+    match read_optional_json(path) {
+        Ok(Some(root)) => {
+            let entry = root
+                .get("mcpServers")
+                .and_then(Value::as_object)
+                .and_then(|servers| servers.get(SERVER_NAME));
+            if entry.is_none() {
+                println!("{label}: MISSING");
+                return;
+            }
+            let command = entry
+                .and_then(|value| value.get("command"))
+                .and_then(Value::as_str);
+            let expected = executable_string(executable).unwrap_or_default();
+            let type_ok = !claude
+                || entry
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("stdio");
+            let ok = command == Some(expected.as_str())
+                && type_ok
+                && entry.is_some_and(is_sippion_json_entry);
+            println!("{label}: {}", if ok { "OK" } else { "MISMATCH" });
+        }
+        Ok(None) => println!("{label}: MISSING"),
+        Err(error) => println!("{label}: ERROR ({error})"),
+    }
+}
+
+fn check_rule(path: &Path, label: &str) {
+    let status = match read_optional_text(path) {
+        Ok(Some(contents)) if contents.contains(RULE_BEGIN) && contents.contains(RULE_END) => "OK",
+        Ok(Some(_)) | Ok(None) => "MISSING",
+        Err(_) => "ERROR",
+    };
+    println!("{label} global rule: {status}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!("sippion-setup-test-{id}"));
+        fs::create_dir_all(&path).expect("temp directory");
+        path
+    }
+
+    #[test]
+    fn codex_config_is_idempotent_and_escapes_unicode_spaces_and_backslashes() {
+        let path = temp_dir().join("config.toml");
+        let executable = Path::new(r"C:\Tools\日本語 project\sippion.exe");
+        let block = format!(
+            "{MANAGED_BEGIN}\n[mcp_servers.sippion]\ncommand = {}\n{MANAGED_END}\n",
+            toml_string(executable.to_str().expect("unicode path"))
+        );
+        let first = upsert_codex_block("[other]\nvalue = true\n", &block);
+        let second = upsert_codex_block(&first, &block);
+        assert_eq!(first, second);
+        assert!(first.contains(r#"C:\\Tools\\日本語 project\\sippion.exe"#));
+        fs::write(&path, first).expect("write");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn json_server_preserves_other_servers_and_is_removable() {
+        let path = temp_dir().join("mcp_config.json");
+        fs::write(&path, r#"{"mcpServers":{"other":{"command":"other"}}}"#).expect("write");
+        let entry = json!({"command":"/tmp/sippion","args":["mcp","--root","."],"cwd":"."});
+        assert_eq!(
+            upsert_json_server(&path, entry).unwrap(),
+            FileChange::Updated
+        );
+        let value = read_optional_json(&path).unwrap().unwrap();
+        assert!(value["mcpServers"]["other"].is_object());
+        assert_eq!(remove_json_server(&path).unwrap(), FileChange::Updated);
+        assert!(read_optional_json(&path).unwrap().unwrap()["mcpServers"]["sippion"].is_null());
+    }
+
+    #[test]
+    fn marked_rule_handles_crlf_and_does_not_duplicate() {
+        let initial = "existing\r\n";
+        let block = format!("{RULE_BEGIN}\r\n# rule\r\n{RULE_END}\r\n");
+        let first = upsert_marked_block(initial, RULE_BEGIN, RULE_END, &block);
+        let second = upsert_marked_block(&first, RULE_BEGIN, RULE_END, &block);
+        assert_eq!(first, second);
+        assert_eq!(remove_block(&first, RULE_BEGIN, RULE_END), initial);
+    }
+}

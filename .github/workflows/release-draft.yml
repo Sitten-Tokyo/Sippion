@@ -1,0 +1,130 @@
+name: Build draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build, for example v0.1.0-rc.30
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            binary: sippion
+            artifact: sippion-linux-x86_64
+          - name: Windows x86_64 MSVC
+            runner: windows-2025
+            binary: sippion.exe
+            artifact: sippion-windows-x86_64.exe
+          - name: macOS Apple Silicon
+            runner: macos-15
+            binary: sippion
+            artifact: sippion-macos-aarch64
+          - name: macOS Intel
+            runner: macos-15-intel
+            binary: sippion
+            artifact: sippion-macos-x86_64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Stage Unix artifact and checksum
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            shasum -a 256 "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
+          else
+            sha256sum "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
+          fi
+          cp dist/SHA256SUMS "dist/${{ matrix.artifact }}.sha256"
+
+      - name: Stage Windows artifact and checksum
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/${{ matrix.artifact }}").Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.artifact }}" | Set-Content -Encoding ascii dist/SHA256SUMS
+          Copy-Item dist/SHA256SUMS "dist/${{ matrix.artifact }}.sha256"
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+
+  draft-release:
+    name: Create draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sippion-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          : > release-assets/SHA256SUMS
+          for directory in downloaded/*; do
+            for file in "$directory"/*; do
+              case "$(basename "$file")" in
+                SHA256SUMS) cat "$file" >> release-assets/SHA256SUMS ;;
+                *) cp "$file" release-assets/ ;;
+              esac
+            done
+          done
+          test -n "$(find release-assets -type f -name 'sippion-*' -print -quit)"
+          test -s release-assets/SHA256SUMS
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${{ inputs.tag }}" \
+            --verify-tag \
+            --draft \
+            --title "Sippion ${{ inputs.tag }}" \
+            --notes "Draft release created manually. Review the four platform binaries and checksums, then publish it from GitHub when approved." \
+            release-assets/*
