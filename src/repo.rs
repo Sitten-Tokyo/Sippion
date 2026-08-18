@@ -5991,8 +5991,16 @@ mod tests {
             second.coverage.indexed_files,
             second.coverage.eligible_files
         );
-        assert_eq!(second.coverage.scanned_files, 0);
-        assert_eq!(second.coverage.scanned_bytes, 0);
+        #[cfg(windows)]
+        assert!(
+            second.coverage.scanned_files >= 2,
+            "Windows rebuilds the RAM index per top-level search to preserve fail-closed freshness"
+        );
+        #[cfg(not(windows))]
+        {
+            assert_eq!(second.coverage.scanned_files, 0);
+            assert_eq!(second.coverage.scanned_bytes, 0);
+        }
     }
 
     #[test]

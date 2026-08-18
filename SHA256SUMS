@@ -29,5 +29,5 @@ fa4702d5d1fdfb36a21002bf00a357ce4d0b03318ca622ad3115298d62798cf1  ./scripts/inst
 a8d226e0688d04ec2b2f6bf1bb8f798c16f6f25f666c989b8ed30c33c67bec89  ./scripts/install.ps1
 308a76f833cedda452c3cdfa0a13876ff2ffb7be2d06d12cb3bdf3459e881f06  ./.github/workflows/release-artifacts.yml
 1760a22377723d12bf483c0fe702eab8c3f85c02fa3ac90822e81faab44f0df6  ./src/service.rs
-f89b9737c4e8fa2b2400dd59d4661c1f1b6f9fb465588bb3e3c09afb02f8f826  ./src/repo.rs
+3318cbf572bf6bbabc07df25a5dfdc59f191c6d0904f6a3ce7b5b3f7f84063ed  ./src/repo.rs
 1c6023024559414197832f9cbd503c980ba21640244b8a4fd19bc20537eb215c  ./src/syntax.rs
