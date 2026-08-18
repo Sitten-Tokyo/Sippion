@@ -242,7 +242,6 @@ fn render_structure_summary(entries: &[RepoMapEntry], max_bytes: usize) -> Strin
     output
 }
 
-#[allow(clippy::manual_checked_ops)]
 fn render_context(
     query: &NormalizedQuery,
     entries: &[RepoMapEntry],
@@ -259,11 +258,11 @@ fn render_context(
         "{DATA_PREFIX}CONTEXT format=sippion-context-v3 files={selected} terms={}\n",
         query.terms.join(",")
     );
-    let coverage_percent = if coverage.eligible_files == 0 {
-        100
-    } else {
-        coverage.indexed_files.saturating_mul(100) / coverage.eligible_files
-    };
+    let coverage_percent = coverage
+        .indexed_files
+        .saturating_mul(100)
+        .checked_div(coverage.eligible_files)
+        .unwrap_or(100);
     let coverage_line = format!(
         "COVERAGE discovery_complete={} indexed={}/{} pct={} partial={} policy_excluded={} scanned_files={} scanned_bytes={} budget_bytes={} budget_cap_bytes={} rounds={} confidence={:.3}\n",
         coverage.discovery_complete,
@@ -381,6 +380,7 @@ mod tests {
         assert!(!output.contains("\n[NO_MATCH]\n"));
         assert!(output.contains("policy_excluded=1"));
 
+        drop(service);
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
@@ -411,6 +411,7 @@ mod tests {
         assert!(!output.contains("\n[NO_MATCH]\n"));
         assert!(!output.contains("policy_excluded=0"));
 
+        drop(service);
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 }

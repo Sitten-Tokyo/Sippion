@@ -1251,6 +1251,7 @@ mod tests {
                 .is_some_and(|text| text.contains("service_boundary_marker"))
         );
 
+        drop(service);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -4274,14 +4274,44 @@ mod tests {
         .expect("valid test query")
     }
 
-    fn temp_root(label: &str) -> PathBuf {
+    struct TestRoot {
+        path: PathBuf,
+    }
+
+    impl TestRoot {
+        fn new(path: PathBuf) -> Self {
+            Self { path }
+        }
+    }
+
+    impl AsRef<Path> for TestRoot {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl std::ops::Deref for TestRoot {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn temp_root(label: &str) -> TestRoot {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!("sippion-{label}-{nonce}"))
+        TestRoot::new(std::env::temp_dir().join(format!("sippion-{label}-{nonce}")))
     }
 
     #[test]
@@ -4298,7 +4328,6 @@ mod tests {
 
         assert_eq!(outcome.hits.len(), 1);
         assert_eq!(outcome.hits[0].relative_path, "z.rs");
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -4353,8 +4382,6 @@ mod tests {
             source.len(),
             "only the newly verified candidate should consume source bytes in round two"
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -4387,8 +4414,6 @@ mod tests {
         assert!(map.truncated);
         assert!(map.entries.is_empty());
         assert_eq!(map.invalidated_evidence_paths, vec!["main.rs"]);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -4442,8 +4467,6 @@ mod tests {
                 .iter()
                 .any(|entry| entry.relative_path == "a.rs")
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -4470,14 +4493,13 @@ mod tests {
             .expect("bounded map");
         assert!(outcome.truncated);
         assert!(outcome.entries.is_empty());
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(unix)]
     #[test]
     fn replaced_root_path_is_rejected_before_ambient_discovery() {
         let root = temp_root("root-identity");
-        let moved = root.with_extension("moved");
+        let moved = TestRoot::new(root.with_extension("moved"));
         std::fs::create_dir_all(&root).expect("create root");
         std::fs::write(root.join("old.rs"), "fn original_root() {}\n").expect("write old");
         let repository = RepositoryAccess::open(&root).expect("open repository");
@@ -4490,9 +4512,6 @@ mod tests {
             .search(&normalized_query("replacement_root"), 8, None)
             .expect_err("replacement must be rejected");
         assert_eq!(error, RepositoryAccessError::ConcurrentModification);
-
-        std::fs::remove_dir_all(&root).expect("cleanup replacement");
-        std::fs::remove_dir_all(&moved).expect("cleanup original");
     }
 
     #[test]
@@ -4560,8 +4579,6 @@ mod tests {
         assert!(outcome.truncated);
         assert_eq!(outcome.files.len(), 1);
         assert_eq!(outcome.files[0].path, "safe.rs");
-
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4597,8 +4614,6 @@ mod tests {
             "ignore rules must prevent an absolute repository-wide NO_MATCH"
         );
         assert!(!outcome.truncated);
-
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4617,8 +4632,6 @@ mod tests {
         assert!(outcome.hits.iter().any(|hit| hit.relative_path == expected));
         let source = repository.read_source(expected).expect("read source");
         assert!(source.text.contains("unicode_path_marker"));
-
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4646,8 +4659,6 @@ mod tests {
         }
         let crlf = repository.read_source("crlf.rs").expect("read CRLF source");
         assert!(crlf.text.contains("\r\n"));
-
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4671,7 +4682,6 @@ mod tests {
         let mut writable = std::fs::metadata(&path).expect("metadata").permissions();
         writable.set_readonly(false);
         std::fs::set_permissions(&path, writable).expect("restore permissions");
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[cfg(windows)]
@@ -4747,7 +4757,6 @@ mod tests {
             .expect("map succeeds");
 
         assert!(outcome.truncated);
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4772,8 +4781,6 @@ mod tests {
         assert_eq!(hit.end_line, 0);
         assert_eq!(hit.excerpt, REDACTED_MATCH_EXCERPT);
         assert!(!hit.excerpt.contains(secret));
-
-        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -5000,7 +5007,6 @@ mod tests {
         let status = match Command::new("mkfifo").arg(&path).status() {
             Ok(status) => status,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::remove_dir_all(&root).expect("cleanup");
                 return;
             }
             Err(error) => panic!("run mkfifo: {error}"),
@@ -5024,82 +5030,50 @@ mod tests {
             Err((RepositoryAccessError::NotRegularFile, 0))
         ));
         worker.join().expect("FIFO read worker");
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(unix)]
     #[test]
     fn symlink_alias_cannot_bypass_denied_path() {
         use std::os::unix::fs::symlink;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sippion-{nonce}"));
+        let root = temp_root("symlink-alias");
         std::fs::create_dir_all(&root).expect("temp root");
         std::fs::write(root.join(".env"), "not-a-real-secret").expect("write denied file");
         symlink(".env", root.join("safe.txt")).expect("create symlink");
 
         let repository = RepositoryAccess::open(&root).expect("open repository");
         assert!(repository.read_source("safe.txt").is_err());
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(unix)]
     #[test]
     fn final_symlink_to_allowed_file_is_still_refused() {
         use std::os::unix::fs::symlink;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sippion-final-link-{nonce}"));
+        let root = temp_root("final-link");
         std::fs::create_dir_all(&root).expect("temp root");
         std::fs::write(root.join("real.rs"), "fn real() {}").expect("write real file");
         symlink("real.rs", root.join("alias.rs")).expect("create symlink");
 
         let repository = RepositoryAccess::open(&root).expect("open repository");
         assert!(repository.read_source("alias.rs").is_err());
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(unix)]
     #[test]
     fn parent_directory_symlink_is_refused() {
         use std::os::unix::fs::symlink;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sippion-parent-link-{nonce}"));
+        let root = temp_root("parent-link");
         std::fs::create_dir_all(root.join("real")).expect("temp root");
         std::fs::write(root.join("real/file.rs"), "fn real() {}").expect("write real file");
         symlink("real", root.join("alias")).expect("create directory symlink");
 
         let repository = RepositoryAccess::open(&root).expect("open repository");
         assert!(repository.read_source("alias/file.rs").is_err());
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
     fn regular_file_still_reads_after_nofollow_hardening() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sippion-regular-{nonce}"));
+        let root = temp_root("regular");
         std::fs::create_dir_all(&root).expect("temp root");
         std::fs::write(root.join("safe.rs"), "fn safe() {}").expect("write regular file");
 
@@ -5108,8 +5082,6 @@ mod tests {
             .read_source("safe.rs")
             .expect("read regular file");
         assert_eq!(source.text, "fn safe() {}");
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(unix)]
@@ -5140,9 +5112,6 @@ mod tests {
         );
         assert_eq!(outcome.coverage.confidence_milli, 350);
         assert!(!outcome.truncated);
-
-        std::fs::remove_dir_all(&root).expect("cleanup root");
-        std::fs::remove_dir_all(&outside).expect("cleanup outside");
     }
 
     #[cfg(windows)]
@@ -5161,9 +5130,6 @@ mod tests {
             .read_source("looks_safe.rs")
             .expect_err("hard-linked source must be denied on Windows");
         assert_eq!(error, RepositoryAccessError::HardLinkedFile);
-
-        std::fs::remove_dir_all(&root).expect("cleanup root");
-        std::fs::remove_dir_all(&outside).expect("cleanup outside");
     }
 
     #[cfg(unix)]
@@ -5180,7 +5146,6 @@ mod tests {
         let after = source_stamp(&std::fs::metadata(&path).expect("metadata after"));
         assert_ne!(before, after);
         assert_eq!(before.len, after.len);
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5205,8 +5170,6 @@ mod tests {
         assert!(index.files.is_empty());
         assert_eq!(index.total_entries, 0);
         assert!(!index.saturated);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(windows)]
@@ -5235,8 +5198,6 @@ mod tests {
                 .iter()
                 .any(|hit| hit.relative_path == "same.rs")
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[cfg(windows)]
@@ -5311,8 +5272,6 @@ mod tests {
             entry.score < 100.0,
             "stale graph centrality must not be reused"
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5327,13 +5286,7 @@ mod tests {
 
     #[test]
     fn non_utf8_read_reports_consumed_bytes_for_scan_budget() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("sippion-binary-{nonce}"));
+        let root = temp_root("binary");
         std::fs::create_dir_all(&root).expect("temp root");
         let bytes = [0xff, 0xfe, 0xfd, 0x00];
         std::fs::write(root.join("binary.bin"), bytes).expect("write binary file");
@@ -5344,8 +5297,6 @@ mod tests {
             .expect_err("binary must not become model text");
         assert_eq!(error, RepositoryAccessError::NonUtf8Source);
         assert_eq!(consumed, bytes.len());
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5415,8 +5366,6 @@ mod tests {
             Some("a_relevant.rs")
         );
         assert!(outcome.hits[0].score > outcome.hits[1].score);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5488,8 +5437,6 @@ mod tests {
                 .iter()
                 .any(|link| { link.relative_path == "auth.rs" && link.weight >= 0.80 })
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5564,7 +5511,6 @@ mod tests {
                 .len(),
             graph_entries
         );
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5593,7 +5539,6 @@ mod tests {
         repository.remember_search(&query, &hits, Some(&first));
         assert!(repository.memory_adjustment(&query.terms, "src/auth.rs", Some(&first)) > 0.0);
         assert!(repository.memory_adjustment(&query.terms, "src/auth.rs", Some(&sibling)) < 0.0);
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5606,8 +5551,6 @@ mod tests {
 
         let result = repository.search(&normalized_query("target helper"), 8, Some(&cancelled));
         assert_eq!(result, Err(RepositoryAccessError::Cancelled));
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5766,8 +5709,6 @@ mod tests {
         );
         assert_eq!(outcome.coverage.confidence_milli, 350);
         assert!(!outcome.truncated);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5789,8 +5730,6 @@ mod tests {
         );
         assert_eq!(outcome.coverage.confidence_milli, 350);
         assert!(!outcome.truncated);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5826,8 +5765,6 @@ mod tests {
         let cache = repository.analysis_cache.lock().expect("analysis cache");
         let cached_debug = format!("{:?}", cache.entries.get("safe.rs"));
         assert!(!cached_debug.contains(sentinel));
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5852,8 +5789,6 @@ mod tests {
             outcome.coverage.adaptive_rounds, 1,
             "candidate-cap truncation alone must not waste scan-budget expansion rounds",
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5878,8 +5813,6 @@ mod tests {
             (0, 0)
         );
         assert_eq!(outcome.hits[0].score, 3.0);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5903,8 +5836,6 @@ mod tests {
         assert_eq!(outcome.hits.len(), 1);
         assert!(!outcome.hits[0].excerpt.contains(secret));
         assert!(outcome.hits[0].excerpt.contains("SIPPION_REDACTED_TOKEN"));
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -5964,8 +5895,6 @@ mod tests {
         assert!(outcome.coverage.policy_excluded_files >= 2);
         assert_eq!(outcome.coverage.confidence_milli, 350);
         assert!(!outcome.truncated);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -6018,8 +5947,6 @@ mod tests {
         );
         assert_eq!(second.coverage.scanned_files, 0);
         assert_eq!(second.coverage.scanned_bytes, 0);
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -6046,8 +5973,6 @@ mod tests {
             second.hits.first().map(|hit| hit.relative_path.as_str()),
             Some("service.rs")
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -6098,8 +6023,6 @@ mod tests {
                 .any(|hit| hit.relative_path == "auth.rs"),
             "Unicode substring must not be filtered out by the RAM candidate index"
         );
-
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -6134,7 +6057,6 @@ mod tests {
                 .expect("index inflight")
                 .contains("src/a.rs")
         );
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
@@ -6163,7 +6085,6 @@ mod tests {
                 .inflight
                 .contains("src/a.rs")
         );
-        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
