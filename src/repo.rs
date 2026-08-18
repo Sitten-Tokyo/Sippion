@@ -2602,6 +2602,7 @@ fn root_identity_from_dir(directory: &Dir) -> Result<RootIdentity, RepositoryAcc
     }
 }
 
+#[cfg(any(not(windows), test))]
 fn source_stamp(metadata: &std::fs::Metadata) -> SourceStamp {
     #[cfg(not(windows))]
     let modified_nanos = metadata
