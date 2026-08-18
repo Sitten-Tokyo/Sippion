@@ -449,20 +449,19 @@ After Sippion is published in a GitHub repository, the canonical release should 
 its SHA-256 checksum, installs it in the current user scope, and runs `sippion setup`.
 It does not require administrator/root access.
 
-The repository owner must replace `OWNER/REPOSITORY` in the installer defaults before
-publishing. Until that is done, the URL is intentionally rejected instead of silently
-downloading from an unknown location.
+The canonical repository is `Sitten-Tokyo/Sippion`. Forks can override the release
+base URL with `SIPPION_RELEASE_BASE_URL` when distributing their own artifacts.
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/REPOSITORY/main/scripts/install.sh | SIPPION_RELEASE_BASE_URL=https://github.com/OWNER/REPOSITORY/releases/latest/download sh
+curl -fsSL https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/main/scripts/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:SIPPION_RELEASE_BASE_URL='https://github.com/OWNER/REPOSITORY/releases/latest/download'; irm 'https://raw.githubusercontent.com/OWNER/REPOSITORY/main/scripts/install.ps1' | iex
+irm 'https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/main/scripts/install.ps1' | iex
 ```
 
 The installer configures the user-wide MCP entry and the short repository-discovery

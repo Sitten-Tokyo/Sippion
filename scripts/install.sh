@@ -5,13 +5,7 @@ set -eu
 # The release URL is intentionally configurable because the OSS repository owner
 # may differ between forks. Set SIPPION_RELEASE_BASE_URL in the one-liner or
 # replace the default after publishing the canonical repository.
-: "${SIPPION_RELEASE_BASE_URL:=https://github.com/OWNER/REPOSITORY/releases/latest/download}"
-case "$SIPPION_RELEASE_BASE_URL" in
-  *OWNER/REPOSITORY*)
-    echo "Set SIPPION_RELEASE_BASE_URL to the published Sippion release URL." >&2
-    exit 2
-    ;;
-esac
+: "${SIPPION_RELEASE_BASE_URL:=https://github.com/Sitten-Tokyo/Sippion/releases/latest/download}"
 
 os=$(uname -s)
 arch=$(uname -m)

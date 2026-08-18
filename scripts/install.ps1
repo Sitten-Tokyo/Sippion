@@ -5,10 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
-    $ReleaseBaseUrl = "https://github.com/OWNER/REPOSITORY/releases/latest/download"
-}
-if ($ReleaseBaseUrl -like "*OWNER/REPOSITORY*") {
-    throw "Set SIPPION_RELEASE_BASE_URL to the published Sippion release URL."
+    $ReleaseBaseUrl = "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download"
 }
 if ($env:PROCESSOR_ARCHITECTURE -notin @("AMD64", "x86_64")) {
     throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE. Windows x86_64 MSVC is currently supported."
