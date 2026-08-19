@@ -18,6 +18,11 @@ if ($requireAttestationValue -notin @("0", "1")) {
     throw "SIPPION_REQUIRE_ATTESTATION must be 0 or 1."
 }
 $requireAttestation = $requireAttestationValue -eq "1"
+$verifyOnlyValue = if ($env:SIPPION_INSTALL_VERIFY_ONLY) { $env:SIPPION_INSTALL_VERIFY_ONLY } else { "0" }
+if ($verifyOnlyValue -notin @("0", "1")) {
+    throw "SIPPION_INSTALL_VERIFY_ONLY must be 0 or 1."
+}
+$verifyOnly = $verifyOnlyValue -eq "1"
 
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 $ghSupportsAttestation = $false
@@ -97,6 +102,11 @@ try {
     }
     else {
         Write-Warning "GitHub artifact attestation verification was explicitly disabled."
+    }
+
+    if ($verifyOnly) {
+        Write-Host "Verified Sippion release artifact $artifact."
+        return
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
