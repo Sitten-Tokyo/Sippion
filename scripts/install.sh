@@ -2,11 +2,11 @@
 set -eu
 
 # Installer for a published Sippion release. The release URL is configurable for
-# forks, but downloads are HTTPS-only. GitHub artifact attestations are verified
-# automatically when a recent GitHub CLI is available.
+# forks, but downloads are HTTPS-only. GitHub artifact attestations are required
+# by default; set SIPPION_REQUIRE_ATTESTATION=0 only for an explicit local opt-out.
 : "${SIPPION_RELEASE_BASE_URL:=https://github.com/Sitten-Tokyo/Sippion/releases/latest/download}"
 : "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
-: "${SIPPION_REQUIRE_ATTESTATION:=0}"
+: "${SIPPION_REQUIRE_ATTESTATION:=1}"
 
 case "$SIPPION_REQUIRE_ATTESTATION" in
   0|1) ;;
@@ -68,10 +68,10 @@ if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
     exit 1
   fi
 elif [ "$SIPPION_REQUIRE_ATTESTATION" = "1" ]; then
-  echo "GitHub CLI with 'gh attestation' support is required for strict provenance verification." >&2
+  echo "GitHub CLI with 'gh attestation' support is required for provenance verification." >&2
   exit 2
 else
-  echo "Warning: GitHub artifact attestation was not verified; install a recent 'gh' CLI or set SIPPION_REQUIRE_ATTESTATION=1 for strict verification." >&2
+  echo "Warning: GitHub artifact attestation verification was explicitly disabled." >&2
 fi
 
 install_dir=${SIPPION_INSTALL_DIR:-"$HOME/.local/bin"}
