@@ -35,6 +35,27 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Validate Unix installer syntax
+        if: runner.os != 'Windows'
+        shell: sh
+        run: sh -n scripts/install.sh
+
+      - name: Validate PowerShell installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/install.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
       - name: Check formatting
         run: cargo fmt --check
 
