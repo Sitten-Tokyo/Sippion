@@ -38,15 +38,17 @@ network, credential, or shell-capable tools.
 
 CI and release workflows pin third-party GitHub Actions to full commit SHAs.
 CI audits `Cargo.lock` against the RustSec advisory database. Release binaries
-are built from an explicitly selected tag with the locked dependency graph,
+are built from an explicitly selected tag resolved to an immutable commit,
 checksummed, and given GitHub artifact attestations. Draft releases also include
 the tag's installer scripts as checksummed, attested assets.
 
 The documented install path downloads an installer before execution and
 verifies its GitHub artifact attestation. Installers verify the selected binary
-against its SHA-256 checksum and, when a recent GitHub CLI is available, verify
-the binary's artifact attestation as well. Set `SIPPION_REQUIRE_ATTESTATION=1`
-to fail closed when provenance verification is unavailable.
+against its SHA-256 checksum and require binary artifact-attestation
+verification by default. If a recent GitHub CLI is unavailable, installation
+fails closed. `SIPPION_REQUIRE_ATTESTATION=0` is an explicit opt-out that emits
+a warning and should be used only when provenance was established by another
+trusted mechanism.
 
 Checksum files provide integrity but are not, by themselves, an authenticity
 mechanism when fetched from the same release as the binary. Artifact
