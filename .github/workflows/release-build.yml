@@ -71,12 +71,15 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            shasum -a 256 "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
-          else
-            sha256sum "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
-          fi
-          cp dist/SHA256SUMS "dist/${{ matrix.artifact }}.sha256"
+          (
+            cd dist
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              shasum -a 256 "${{ matrix.artifact }}" > SHA256SUMS
+            else
+              sha256sum "${{ matrix.artifact }}" > SHA256SUMS
+            fi
+            cp SHA256SUMS "${{ matrix.artifact }}.sha256"
+          )
 
       - name: Stage Windows artifact and checksum
         if: runner.os == 'Windows'
