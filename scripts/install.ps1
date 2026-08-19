@@ -29,18 +29,17 @@ if ($requireAttestation -and -not $ghSupportsAttestation) {
     throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
 }
 
+$headers = @{
+    Accept = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2026-03-10"
+}
+
 if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
     if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
-        if (-not $ghSupportsAttestation) {
-            throw "Set SIPPION_RELEASE_TAG or SIPPION_RELEASE_BASE_URL when GitHub CLI is unavailable."
-        }
-        $tagOutput = & gh api "repos/$AttestationRepository/releases?per_page=100" --jq 'map(select(.draft == false))[0].tag_name'
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not resolve the newest published Sippion release from GitHub."
-        }
-        $ReleaseTag = ($tagOutput | Out-String).Trim()
+        $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$AttestationRepository/releases?per_page=1"
+        $ReleaseTag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
     }
-    if ($ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
         throw "Resolved release tag is invalid: $ReleaseTag"
     }
     $ReleaseBaseUrl = "https://github.com/$AttestationRepository/releases/download/$ReleaseTag"
@@ -77,7 +76,18 @@ try {
     }
 
     if ($ghSupportsAttestation) {
-        & gh attestation verify $binary --repo $AttestationRepository
+        $attestationResponse = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$AttestationRepository/attestations/sha256:$actual?predicate_type=provenance&per_page=1"
+        $bundleUrl = $attestationResponse.attestations[0].bundle_url
+        if ([string]::IsNullOrWhiteSpace($bundleUrl)) {
+            throw "Could not resolve a Sippion attestation bundle URL."
+        }
+        $bundleUri = [Uri]$bundleUrl
+        if (-not $bundleUri.IsAbsoluteUri -or $bundleUri.Scheme -ne "https") {
+            throw "Sippion attestation bundle URL was not HTTPS."
+        }
+        $attestationBundle = Join-Path $tempRoot "attestation.bundle.json"
+        Invoke-WebRequest -Uri $bundleUri -OutFile $attestationBundle
+        & gh attestation verify $binary --repo $AttestationRepository --bundle $attestationBundle
         if ($LASTEXITCODE -ne 0) {
             throw "Sippion GitHub artifact attestation verification failed."
         }
