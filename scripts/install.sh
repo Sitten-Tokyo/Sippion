@@ -1,16 +1,63 @@
 #!/bin/sh
 set -eu
 
-# Installer for a published Sippion release. The release URL is configurable for
-# forks, but downloads are HTTPS-only. GitHub artifact attestations are required
-# by default; set SIPPION_REQUIRE_ATTESTATION=0 only for an explicit local opt-out.
-: "${SIPPION_RELEASE_BASE_URL:=https://github.com/Sitten-Tokyo/Sippion/releases/latest/download}"
+# Installer for a published Sippion release. By default it resolves the newest
+# published release, including prereleases, through the authenticated GitHub CLI.
+# SIPPION_RELEASE_TAG pins installer and binary downloads to one release.
+# SIPPION_RELEASE_BASE_URL is an explicit HTTPS override for mirrors/forks.
 : "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
 : "${SIPPION_REQUIRE_ATTESTATION:=1}"
+: "${SIPPION_RELEASE_TAG:=}"
+: "${SIPPION_RELEASE_BASE_URL:=}"
 
 case "$SIPPION_REQUIRE_ATTESTATION" in
   0|1) ;;
   *) echo "SIPPION_REQUIRE_ATTESTATION must be 0 or 1." >&2; exit 2 ;;
+esac
+
+command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 2; }
+command -v mktemp >/dev/null 2>&1 || { echo "mktemp is required" >&2; exit 2; }
+command -v grep >/dev/null 2>&1 || { echo "grep is required" >&2; exit 2; }
+
+case "$SIPPION_ATTESTATION_REPOSITORY" in
+  */*) ;;
+  *) echo "SIPPION_ATTESTATION_REPOSITORY must be owner/repository." >&2; exit 2 ;;
+esac
+if ! printf '%s\n' "$SIPPION_ATTESTATION_REPOSITORY" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+  echo "SIPPION_ATTESTATION_REPOSITORY contains unsupported characters." >&2
+  exit 2
+fi
+
+gh_supports_attestation=0
+if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+  gh_supports_attestation=1
+fi
+if [ "$SIPPION_REQUIRE_ATTESTATION" = "1" ] && [ "$gh_supports_attestation" != "1" ]; then
+  echo "GitHub CLI with 'gh attestation' support is required for provenance verification." >&2
+  exit 2
+fi
+
+if [ -z "$SIPPION_RELEASE_BASE_URL" ]; then
+  if [ -z "$SIPPION_RELEASE_TAG" ]; then
+    if [ "$gh_supports_attestation" != "1" ]; then
+      echo "Set SIPPION_RELEASE_TAG or SIPPION_RELEASE_BASE_URL when GitHub CLI is unavailable." >&2
+      exit 2
+    fi
+    SIPPION_RELEASE_TAG=$(gh api \
+      "repos/$SIPPION_ATTESTATION_REPOSITORY/releases?per_page=100" \
+      --jq 'map(select(.draft == false))[0].tag_name')
+  fi
+
+  if ! printf '%s\n' "$SIPPION_RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+    echo "Resolved release tag is invalid: $SIPPION_RELEASE_TAG" >&2
+    exit 2
+  fi
+  SIPPION_RELEASE_BASE_URL="https://github.com/$SIPPION_ATTESTATION_REPOSITORY/releases/download/$SIPPION_RELEASE_TAG"
+fi
+
+case "$SIPPION_RELEASE_BASE_URL" in
+  https://*) ;;
+  *) echo "SIPPION_RELEASE_BASE_URL must be an absolute HTTPS URL." >&2; exit 2 ;;
 esac
 
 os=$(uname -s)
@@ -24,9 +71,6 @@ case "$os:$arch" in
     exit 2
     ;;
 esac
-
-command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 2; }
-command -v mktemp >/dev/null 2>&1 || { echo "mktemp is required" >&2; exit 2; }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-install.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
@@ -62,7 +106,7 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+if [ "$gh_supports_attestation" = "1" ]; then
   if ! gh attestation verify "$binary" --repo "$SIPPION_ATTESTATION_REPOSITORY" >/dev/null; then
     echo "Sippion GitHub artifact attestation verification failed." >&2
     exit 1
