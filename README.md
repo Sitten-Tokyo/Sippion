@@ -31,56 +31,48 @@ See [Security and trust boundary](docs/security.md) for the complete boundary.
 
 ## Install
 
-Published release binaries and installers carry GitHub artifact attestations.
-The recommended installation path asks the GitHub API for the newest published
-release, including prereleases, pins the installer and binary to that same tag,
-verifies installer provenance, and only then executes it. A recent GitHub CLI
-(`gh`) is required for provenance verification.
+One command installs the newest published Sippion release, verifies its
+checksums, and runs `sippion setup` automatically. No GitHub login is required.
 
 macOS / Linux:
 
 ```sh
-repo=Sitten-Tokyo/Sippion
-tag=$(gh api "repos/$repo/releases?per_page=100" \
-  --jq 'map(select(.draft == false))[0].tag_name') || exit 1
-printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || exit 1
-tmp=$(mktemp -d)
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
-  "https://github.com/$repo/releases/download/$tag/install.sh" \
-  -o "$tmp/install.sh"
-gh attestation verify "$tmp/install.sh" --repo "$repo" || { rm -rf "$tmp"; exit 1; }
-SIPPION_RELEASE_TAG="$tag" sh "$tmp/install.sh"
-rm -rf "$tmp"
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-$repo = "Sitten-Tokyo/Sippion"
-$tagOutput = & gh api "repos/$repo/releases?per_page=100" --jq 'map(select(.draft == false))[0].tag_name'
-if ($LASTEXITCODE -ne 0) { throw "Could not resolve the newest published Sippion release." }
-$tag = ($tagOutput | Out-String).Trim()
-if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') { throw "Invalid release tag: $tag" }
-$tmp = Join-Path $env:TEMP ("sippion-install-" + [Guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $tmp | Out-Null
-$installer = Join-Path $tmp "install.ps1"
-Invoke-WebRequest "https://github.com/$repo/releases/download/$tag/install.ps1" -OutFile $installer
-& gh attestation verify $installer --repo $repo
-if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Recurse -Force; throw "Installer attestation verification failed." }
-& $installer -ReleaseTag $tag -AttestationRepository $repo
-Remove-Item -LiteralPath $tmp -Recurse -Force
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.ps1 | iex
 ```
 
-The installers also verify the matching per-platform SHA-256 file, install in
-the current user scope, and run `sippion setup`. Binary artifact-attestation
-verification is required by default and fails closed if a recent `gh` CLI is
-not available. `SIPPION_RELEASE_TAG` pins binary downloads to the same release
-as a verified installer; `SIPPION_RELEASE_BASE_URL` is an explicit HTTPS
-override for mirrors or controlled forks. `SIPPION_REQUIRE_ATTESTATION=0` is an
-explicit local opt-out and prints a warning; it should be used only when
-provenance has been verified by another trusted mechanism. Release assets also
-include `install.sh.sha256`, `install.ps1.sha256`, per-platform `.sha256` files,
-and an aggregate `SHA256SUMS` file.
+The bootstrap URL is pinned to a specific Git commit rather than `main`. It
+resolves one published release tag, verifies the release installer SHA-256,
+and the release installer verifies the matching platform binary SHA-256 before
+installation.
+
+Installation keeps Sippion's existing current-user setup behavior:
+
+```text
+Sippion installed
+    ↓
+Codex + Claude Code + Antigravity pre-registered
+    ↓
+Restart the AI clients
+    ↓
+Sippion is available when you open any project
+```
+
+All three clients are pre-registered even if one is not currently installed.
+Each client starts Sippion with `--root .`, so the active project becomes that
+Sippion process's read-only project root; no per-project Sippion registration is
+needed.
+
+Published release binaries and installers still carry GitHub artifact
+attestations. The one-command path is intentionally login-free and uses the
+commit-pinned bootstrap plus SHA-256 verification. For the stricter authenticated
+artifact-attestation path and the exact trust trade-off, see
+[Security and trust boundary](docs/security.md).
 
 See [client setup](docs/clients.md) for manual registration, diagnostics, and
 uninstall details.

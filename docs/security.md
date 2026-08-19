@@ -39,25 +39,49 @@ network, credential, or shell-capable tools.
 CI and release workflows pin third-party GitHub Actions to full commit SHAs.
 CI audits `Cargo.lock` against the RustSec advisory database. Release binaries
 are built from an explicitly selected tag resolved to an immutable commit,
-checksummed, and given GitHub artifact attestations. Draft releases also include
-the tag's installer scripts as checksummed, attested assets.
+checksummed, and given GitHub artifact attestations. Release installer scripts
+are also published as checksummed, attested assets.
 
-The documented install path resolves the newest published release, including
-prereleases, through the GitHub API. It downloads and verifies the installer,
-then passes the resolved tag into the installer so the binary and checksum are
-fetched from that exact same release rather than re-resolving a moving `latest`
-alias. This avoids a release-selection race and also avoids GitHub's
-non-prerelease-only `releases/latest` semantics for release-candidate builds.
+### Default one-command installation
 
-Installers verify the selected binary against its SHA-256 checksum and require
-binary artifact-attestation verification by default. If a recent GitHub CLI is
-unavailable, installation fails closed unless an explicit HTTPS release base or
-release tag is supplied together with an intentional attestation opt-out.
-`SIPPION_REQUIRE_ATTESTATION=0` is an explicit opt-out that emits a warning and
-should be used only when provenance was established by another trusted
-mechanism.
+The README's bootstrap URL is pinned to an exact Sippion Git commit rather than
+`main`, so the bootstrap script referenced by the documentation cannot change
+when the branch moves. The bootstrap then:
 
-Checksum files provide integrity but are not, by themselves, an authenticity
-mechanism when fetched from the same release as the binary. Artifact
-attestations provide the provenance check that binds release assets to the
-GitHub Actions workflow identity.
+1. queries GitHub's public Releases API for the newest published Sippion release,
+   including prereleases;
+2. pins subsequent downloads to that one release tag;
+3. downloads the release installer and its `.sha256` file and verifies the
+   installer SHA-256 before execution;
+4. runs the release installer with the explicit no-attestation option; and
+5. the release installer downloads the platform binary and matching `.sha256`
+   file, verifies the binary SHA-256, installs it for the current user, and runs
+   `sippion setup`.
+
+The default bootstrap does not require a GitHub account, GitHub CLI login, or an
+access token. It intentionally trades independent artifact-provenance
+verification for a much simpler installation path. Its trust chain is the
+commit-pinned bootstrap plus HTTPS to GitHub and SHA-256 values published with
+the selected GitHub Release.
+
+Checksums fetched from the same release as the artifact provide corruption and
+mismatch detection, but are not an independent authenticity mechanism if the
+release itself is compromised. This limitation is explicit rather than hidden.
+
+### Authenticated artifact-attestation installation
+
+Release artifacts continue to carry GitHub artifact attestations. Direct use of
+`scripts/install.sh` or `scripts/install.ps1` requires artifact-attestation
+verification by default and fails closed unless a GitHub CLI with
+`gh attestation` support is available and authenticated. This path verifies the
+binary checksum and then binds the artifact to the GitHub Actions workflow
+identity through its attestation.
+
+`SIPPION_REQUIRE_ATTESTATION=0` is an explicit opt-out. Future installers treat
+that value deterministically: if it is `0`, attestation is skipped even when a
+`gh` executable happens to be installed. The one-command bootstrap uses this
+explicit mode after performing its own commit-pinned/bootstrap checksum checks.
+
+`SIPPION_RELEASE_TAG` pins binary downloads to one release. An explicit
+`SIPPION_RELEASE_BASE_URL` / `ReleaseBaseUrl` remains available for controlled
+HTTPS mirrors and forks.
