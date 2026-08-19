@@ -33,13 +33,23 @@ jobs:
             echo "Invalid release tag: $RELEASE_TAG" >&2
             exit 2
           fi
-          gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null
-          commit_sha=$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')
-          if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve $RELEASE_TAG to a commit SHA." >&2
+
+          ref_endpoint="repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG"
+          object_type=$(gh api "$ref_endpoint" --jq '.object.type')
+          object_sha=$(gh api "$ref_endpoint" --jq '.object.sha')
+
+          while [ "$object_type" = "tag" ]; do
+            tag_sha=$object_sha
+            tag_endpoint="repos/$REPOSITORY/git/tags/$tag_sha"
+            object_type=$(gh api "$tag_endpoint" --jq '.object.type')
+            object_sha=$(gh api "$tag_endpoint" --jq '.object.sha')
+          done
+
+          if [ "$object_type" != "commit" ] || ! [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release tag $RELEASE_TAG does not resolve to a commit SHA." >&2
             exit 2
           fi
-          echo "sha=$commit_sha" >> "$GITHUB_OUTPUT"
+          echo "sha=$object_sha" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build draft release artifacts
