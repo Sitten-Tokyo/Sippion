@@ -9,10 +9,15 @@ set -eu
 : "${SIPPION_REQUIRE_ATTESTATION:=1}"
 : "${SIPPION_RELEASE_TAG:=}"
 : "${SIPPION_RELEASE_BASE_URL:=}"
+: "${SIPPION_INSTALL_VERIFY_ONLY:=0}"
 
 case "$SIPPION_REQUIRE_ATTESTATION" in
   0|1) ;;
   *) echo "SIPPION_REQUIRE_ATTESTATION must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$SIPPION_INSTALL_VERIFY_ONLY" in
+  0|1) ;;
+  *) echo "SIPPION_INSTALL_VERIFY_ONLY must be 0 or 1." >&2; exit 2 ;;
 esac
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 2; }
@@ -135,6 +140,11 @@ elif [ "$SIPPION_REQUIRE_ATTESTATION" = "1" ]; then
   exit 2
 else
   echo "Warning: GitHub artifact attestation verification was explicitly disabled." >&2
+fi
+
+if [ "$SIPPION_INSTALL_VERIFY_ONLY" = "1" ]; then
+  echo "Verified Sippion release artifact $artifact."
+  exit 0
 fi
 
 install_dir=${SIPPION_INSTALL_DIR:-"$HOME/.local/bin"}
