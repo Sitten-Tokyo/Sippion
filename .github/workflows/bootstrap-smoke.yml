@@ -1,0 +1,146 @@
+name: Bootstrap smoke test
+
+on:
+  pull_request:
+    paths:
+      - scripts/bootstrap.sh
+      - scripts/bootstrap.ps1
+      - scripts/install.sh
+      - scripts/install.ps1
+      - .github/workflows/bootstrap-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 bootstrap
+            runner: ubuntu-24.04
+          - name: Windows x86_64 bootstrap
+            runner: windows-2025
+          - name: macOS Apple Silicon bootstrap
+            runner: macos-15
+          - name: macOS Intel bootstrap
+            runner: macos-15-intel
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify Unix bootstrap download chain without GitHub auth
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          sh scripts/bootstrap.sh
+
+      - name: Exercise Unix one-command install in isolated home
+        if: runner.os != 'Windows'
+        shell: sh
+        run: |
+          set -eu
+          unset GH_TOKEN GITHUB_TOKEN
+          export HOME="$RUNNER_TEMP/sippion-home"
+          export SIPPION_INSTALL_DIR="$RUNNER_TEMP/sippion-bin"
+          mkdir -p "$HOME"
+          sh scripts/bootstrap.sh
+          test -x "$SIPPION_INSTALL_DIR/sippion"
+          test -s "$HOME/.codex/config.toml"
+          test -s "$HOME/.claude.json"
+          test -s "$HOME/.gemini/config/mcp_config.json"
+          test -s "$HOME/.codex/AGENTS.md"
+          test -s "$HOME/.claude/CLAUDE.md"
+          test -s "$HOME/.gemini/GEMINI.md"
+          grep -q 'mcp_servers.sippion' "$HOME/.codex/config.toml"
+          grep -q '"sippion"' "$HOME/.claude.json"
+          grep -q '"sippion"' "$HOME/.gemini/config/mcp_config.json"
+
+      - name: Verify Unix direct installer checksum path without GitHub auth
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          SIPPION_REQUIRE_ATTESTATION: '0'
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          sh scripts/install.sh
+
+      - name: Verify Unix direct installer attestation path
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIPPION_REQUIRE_ATTESTATION: '1'
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: sh scripts/install.sh
+
+      - name: Verify Windows bootstrap download chain without GitHub auth
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          & scripts/bootstrap.ps1
+
+      - name: Exercise Windows one-command install in isolated home
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          $fakeHome = Join-Path $env:RUNNER_TEMP "sippion-home"
+          $bin = Join-Path $env:RUNNER_TEMP "sippion-bin"
+          New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+          $env:USERPROFILE = $fakeHome
+          $env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
+          $env:SIPPION_INSTALL_DIR = $bin
+          & scripts/bootstrap.ps1
+          if (-not (Test-Path -LiteralPath (Join-Path $bin "sippion.exe") -PathType Leaf)) { throw "Sippion binary was not installed." }
+          foreach ($path in @(
+            (Join-Path $fakeHome ".codex\config.toml"),
+            (Join-Path $fakeHome ".claude.json"),
+            (Join-Path $fakeHome ".gemini\config\mcp_config.json"),
+            (Join-Path $fakeHome ".codex\AGENTS.md"),
+            (Join-Path $fakeHome ".claude\CLAUDE.md"),
+            (Join-Path $fakeHome ".gemini\GEMINI.md")
+          )) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Expected setup file missing: $path" }
+          }
+
+      - name: Verify Windows direct installer checksum path without GitHub auth
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIPPION_REQUIRE_ATTESTATION: '0'
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          & scripts/install.ps1
+
+      - name: Verify Windows direct installer attestation path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIPPION_REQUIRE_ATTESTATION: '1'
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: '& scripts/install.ps1'

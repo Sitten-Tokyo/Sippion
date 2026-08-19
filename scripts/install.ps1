@@ -18,29 +18,23 @@ if ($requireAttestationValue -notin @("0", "1")) {
     throw "SIPPION_REQUIRE_ATTESTATION must be 0 or 1."
 }
 $requireAttestation = $requireAttestationValue -eq "1"
-
-$gh = Get-Command gh -ErrorAction SilentlyContinue
-$ghSupportsAttestation = $false
-if ($gh) {
-    & gh attestation --help *> $null
-    $ghSupportsAttestation = $LASTEXITCODE -eq 0
+$verifyOnlyValue = if ($env:SIPPION_INSTALL_VERIFY_ONLY) { $env:SIPPION_INSTALL_VERIFY_ONLY } else { "0" }
+if ($verifyOnlyValue -notin @("0", "1")) {
+    throw "SIPPION_INSTALL_VERIFY_ONLY must be 0 or 1."
 }
-if ($requireAttestation -and -not $ghSupportsAttestation) {
-    throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
+$verifyOnly = $verifyOnlyValue -eq "1"
+
+$headers = @{
+    Accept = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2026-03-10"
 }
 
 if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
     if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
-        if (-not $ghSupportsAttestation) {
-            throw "Set SIPPION_RELEASE_TAG or SIPPION_RELEASE_BASE_URL when GitHub CLI is unavailable."
-        }
-        $tagOutput = & gh api "repos/$AttestationRepository/releases?per_page=100" --jq 'map(select(.draft == false))[0].tag_name'
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not resolve the newest published Sippion release from GitHub."
-        }
-        $ReleaseTag = ($tagOutput | Out-String).Trim()
+        $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$AttestationRepository/releases?per_page=1"
+        $ReleaseTag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
     }
-    if ($ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
         throw "Resolved release tag is invalid: $ReleaseTag"
     }
     $ReleaseBaseUrl = "https://github.com/$AttestationRepository/releases/download/$ReleaseTag"
@@ -76,17 +70,27 @@ try {
         throw "Sippion checksum verification failed."
     }
 
-    if ($ghSupportsAttestation) {
+    if ($requireAttestation) {
+        $gh = Get-Command gh -ErrorAction SilentlyContinue
+        if (-not $gh) {
+            throw "GitHub CLI is required for artifact-attestation verification."
+        }
+        & gh attestation --help *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "A GitHub CLI version with 'gh attestation' support is required."
+        }
         & gh attestation verify $binary --repo $AttestationRepository
         if ($LASTEXITCODE -ne 0) {
             throw "Sippion GitHub artifact attestation verification failed."
         }
     }
-    elseif ($requireAttestation) {
-        throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
-    }
     else {
         Write-Warning "GitHub artifact attestation verification was explicitly disabled."
+    }
+
+    if ($verifyOnly) {
+        Write-Host "Verified Sippion release artifact $artifact."
+        return
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
