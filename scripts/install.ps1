@@ -1,21 +1,50 @@
 [CmdletBinding()]
 param(
     [string]$ReleaseBaseUrl = $env:SIPPION_RELEASE_BASE_URL,
+    [string]$ReleaseTag = $env:SIPPION_RELEASE_TAG,
     [string]$AttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
 )
 
 $ErrorActionPreference = "Stop"
-if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
-    $ReleaseBaseUrl = "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download"
-}
 if ([string]::IsNullOrWhiteSpace($AttestationRepository)) {
     $AttestationRepository = "Sitten-Tokyo/Sippion"
 }
+if ($AttestationRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw "AttestationRepository must be owner/repository using GitHub-safe characters."
+}
+
 $requireAttestationValue = if ($env:SIPPION_REQUIRE_ATTESTATION) { $env:SIPPION_REQUIRE_ATTESTATION } else { "1" }
 if ($requireAttestationValue -notin @("0", "1")) {
     throw "SIPPION_REQUIRE_ATTESTATION must be 0 or 1."
 }
 $requireAttestation = $requireAttestationValue -eq "1"
+
+$gh = Get-Command gh -ErrorAction SilentlyContinue
+$ghSupportsAttestation = $false
+if ($gh) {
+    & gh attestation --help *> $null
+    $ghSupportsAttestation = $LASTEXITCODE -eq 0
+}
+if ($requireAttestation -and -not $ghSupportsAttestation) {
+    throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
+}
+
+if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+        if (-not $ghSupportsAttestation) {
+            throw "Set SIPPION_RELEASE_TAG or SIPPION_RELEASE_BASE_URL when GitHub CLI is unavailable."
+        }
+        $tagOutput = & gh api "repos/$AttestationRepository/releases?per_page=100" --jq 'map(select(.draft == false))[0].tag_name'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not resolve the newest published Sippion release from GitHub."
+        }
+        $ReleaseTag = ($tagOutput | Out-String).Trim()
+    }
+    if ($ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+        throw "Resolved release tag is invalid: $ReleaseTag"
+    }
+    $ReleaseBaseUrl = "https://github.com/$AttestationRepository/releases/download/$ReleaseTag"
+}
 
 $baseUri = [Uri]$ReleaseBaseUrl
 if (-not $baseUri.IsAbsoluteUri -or $baseUri.Scheme -ne "https") {
@@ -47,12 +76,6 @@ try {
         throw "Sippion checksum verification failed."
     }
 
-    $gh = Get-Command gh -ErrorAction SilentlyContinue
-    $ghSupportsAttestation = $false
-    if ($gh) {
-        & gh attestation --help *> $null
-        $ghSupportsAttestation = $LASTEXITCODE -eq 0
-    }
     if ($ghSupportsAttestation) {
         & gh attestation verify $binary --repo $AttestationRepository
         if ($LASTEXITCODE -ne 0) {
