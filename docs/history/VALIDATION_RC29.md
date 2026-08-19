@@ -1,4 +1,4 @@
-# RC29 source-level validation
+# RC29 source-level validation (historical record)
 
 This archive received source-level/static validation only. The separate Rust build/test gate remains intentionally unresolved.
 

@@ -1,4 +1,4 @@
-# RC27 source-level validation
+# RC27 source-level validation (historical record)
 
 This archive contains source-level hardening only. The separate RC26 release-validation gate was intentionally not claimed as solved.
 

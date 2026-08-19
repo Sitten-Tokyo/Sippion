@@ -1,4 +1,4 @@
-# RC25 Context changes
+# RC25 context changes (historical record)
 
 - Replaced the three public MCP tools (`repo_discover`, `repo_map`, `repo_pack`) with one public tool: `repo_context`.
 - Added `AGENTS.md` and `CLAUDE.md` with the requested short instruction to use Sippion before broad recursive repository exploration.
@@ -10,7 +10,7 @@
 - Kept bounded excerpt extraction and RTK-style conservative whitespace compaction.
 - Consolidated Repomix-style multi-file packing and structural summary into one `sippion-context-v1` response.
 - Consolidated capability-registry metadata to one `repository.context` capability and documented its Local engine / Output optimizer sub-capabilities.
-- Added an explicit integrated-software/function matrix to `README.md` and `INTEGRATIONS.md`.
+- Added an explicit integrated-software/function matrix to `README.md` and the integration-boundary document now kept at `docs/integrations.md`.
 - Preserved no-network, read-only, project-scoped filesystem access, symlink refusal, secret redaction, cancellation, byte/time/result caps, and no production file writes.
 - Original RC25 kept the direct Cargo dependency set unchanged; the reviewed hardening below adds `aho-corasick`.
 - Bumped package version to `0.1.0-rc.25`.

@@ -1,4 +1,4 @@
-# RC27 completeness and safety hardening
+# RC27 completeness and safety hardening (historical record)
 
 - Bumped package version to `0.1.0-rc.27`.
 - Candidate generation now records when the ranked candidate list is pruned before exact source verification. Any such pruning forces `SearchOutcome.truncated = true`, so an n-gram/path candidate cap can never be misreported as a complete `NO_MATCH`.
