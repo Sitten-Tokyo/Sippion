@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 # Minimal immutable bootstrap for Sippion. It downloads a pinned GitHub CLI into
 # a temporary directory, verifies that CLI against GitHub's published checksum,
-# then uses a public attestation bundle to verify Sippion release provenance.
+# then uses an anonymously fetched inline attestation bundle to verify Sippion.
 # Nothing from the temporary GitHub CLI is installed persistently.
 
 $repo = "Sitten-Tokyo/Sippion"
@@ -17,9 +17,13 @@ if ($env:PROCESSOR_ARCHITECTURE -notin @("AMD64", "x86_64")) {
     throw "Unsupported bootstrap architecture: $env:PROCESSOR_ARCHITECTURE. Windows x86_64 is supported."
 }
 
-$headers = @{
+$releaseHeaders = @{
     Accept = "application/vnd.github+json"
     "X-GitHub-Api-Version" = "2026-03-10"
+}
+$attestationHeaders = @{
+    Accept = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2022-11-28"
 }
 
 $tempRoot = Join-Path $env:TEMP ("sippion-bootstrap-{0}" -f [Guid]::NewGuid().ToString("N"))
@@ -65,7 +69,7 @@ try {
         throw "Verified GitHub CLI archive did not contain gh.exe under a bin directory."
     }
 
-    $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=1"
+    $releases = Invoke-RestMethod -Headers $releaseHeaders -Uri "https://api.github.com/repos/$repo/releases?per_page=1"
     $tag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
     if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
         throw "Could not resolve a valid published Sippion release tag."
@@ -86,17 +90,13 @@ try {
         throw "Sippion installer checksum verification failed."
     }
 
-    $attestationResponse = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/attestations/sha256:$installerActual?predicate_type=provenance&per_page=1"
-    $bundleUrl = $attestationResponse.attestations[0].bundle_url
-    if ([string]::IsNullOrWhiteSpace($bundleUrl)) {
-        throw "Could not resolve a Sippion installer attestation bundle URL."
-    }
-    $bundleUri = [Uri]$bundleUrl
-    if (-not $bundleUri.IsAbsoluteUri -or $bundleUri.Scheme -ne "https") {
-        throw "Sippion installer attestation bundle URL was not HTTPS."
+    $attestationResponse = Invoke-RestMethod -Headers $attestationHeaders -Uri "https://api.github.com/repos/$repo/attestations/sha256:$installerActual?predicate_type=provenance&per_page=1"
+    $bundle = $attestationResponse.attestations[0].bundle
+    if ($null -eq $bundle) {
+        throw "GitHub did not return an inline Sippion installer attestation bundle."
     }
     $installerBundle = Join-Path $tempRoot "installer-attestation.bundle.json"
-    Invoke-WebRequest -Uri $bundleUri -OutFile $installerBundle
+    $bundle | ConvertTo-Json -Depth 100 -Compress | Set-Content -LiteralPath $installerBundle -Encoding utf8NoBOM
     & $ghBin attestation verify $installer --repo $repo --bundle $installerBundle *> $null
     if ($LASTEXITCODE -ne 0) {
         throw "Sippion installer provenance verification failed."
