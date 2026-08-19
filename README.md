@@ -34,7 +34,7 @@ See [Security and trust boundary](docs/security.md) for the complete boundary.
 Published release binaries and installers carry GitHub artifact attestations.
 The recommended installation path downloads the installer first, verifies its
 provenance, and only then executes it. A recent GitHub CLI (`gh`) is required
-for strict provenance verification.
+for provenance verification.
 
 macOS / Linux:
 
@@ -44,7 +44,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
   https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.sh \
   -o "$tmp/install.sh"
 gh attestation verify "$tmp/install.sh" --repo Sitten-Tokyo/Sippion
-SIPPION_REQUIRE_ATTESTATION=1 sh "$tmp/install.sh"
+sh "$tmp/install.sh"
 rm -rf "$tmp"
 ```
 
@@ -56,17 +56,18 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 $installer = Join-Path $tmp "install.ps1"
 Invoke-WebRequest "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.ps1" -OutFile $installer
 gh attestation verify $installer --repo Sitten-Tokyo/Sippion
-$env:SIPPION_REQUIRE_ATTESTATION = "1"
 & $installer
 Remove-Item -LiteralPath $tmp -Recurse -Force
 ```
 
 The installers also verify the matching per-platform SHA-256 file, install in
-the current user scope, and run `sippion setup`. If `gh attestation` is
-available, binary provenance is verified automatically; setting
-`SIPPION_REQUIRE_ATTESTATION=1` makes that verification mandatory. Release
-assets also include `install.sh.sha256`, `install.ps1.sha256`, per-platform
-`.sha256` files, and an aggregate `SHA256SUMS` file.
+the current user scope, and run `sippion setup`. Binary artifact-attestation
+verification is required by default and fails closed if a recent `gh` CLI is
+not available. `SIPPION_REQUIRE_ATTESTATION=0` is an explicit local opt-out and
+prints a warning; it should be used only when provenance has been verified by
+another trusted mechanism. Release assets also include `install.sh.sha256`,
+`install.ps1.sha256`, per-platform `.sha256` files, and an aggregate
+`SHA256SUMS` file.
 
 See [client setup](docs/clients.md) for manual registration, diagnostics, and
 uninstall details.
