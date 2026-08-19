@@ -19,6 +19,8 @@ jobs:
       ref: ${{ inputs.tag }}
     permissions:
       contents: read
+      id-token: write
+      attestations: write
 
   draft-release:
     name: Create draft release
@@ -26,9 +28,28 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      - name: Validate release tag input
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          fi
+
+      - name: Check out tagged installer sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
       - name: Download platform artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: sippion-*
           path: downloaded
@@ -48,19 +69,36 @@ jobs:
               esac
             done
           done
+          cp scripts/install.sh release-assets/install.sh
+          cp scripts/install.ps1 release-assets/install.ps1
+          (
+            cd release-assets
+            sha256sum install.sh > install.sh.sha256
+            sha256sum install.ps1 > install.ps1.sha256
+            cat install.sh.sha256 install.ps1.sha256 >> SHA256SUMS
+          )
           test -n "$(find release-assets -type f -name 'sippion-*' -print -quit)"
           test -s release-assets/SHA256SUMS
+
+      - name: Attest installer provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            release-assets/install.sh
+            release-assets/install.ps1
 
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${{ inputs.tag }}" \
-            --repo "${{ github.repository }}" \
+          gh release create "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
             --verify-tag \
             --draft \
-            --title "Sippion ${{ inputs.tag }}" \
-            --notes "Draft release created manually. Review the four platform binaries and checksums, then publish it from GitHub when approved." \
+            --title "Sippion $RELEASE_TAG" \
+            --notes "Draft release created manually. Review the four platform binaries, installers, checksums, and GitHub artifact attestations before publishing." \
             release-assets/*
