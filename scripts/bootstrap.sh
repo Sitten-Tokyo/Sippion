@@ -3,8 +3,8 @@ set -eu
 
 # Minimal immutable bootstrap for Sippion. It downloads a pinned GitHub CLI into
 # a temporary directory, verifies that CLI against GitHub's published checksum,
-# then uses it only to verify Sippion release provenance. Nothing from the
-# temporary GitHub CLI is installed persistently.
+# then uses a public attestation bundle to verify Sippion release provenance.
+# Nothing from the temporary GitHub CLI is installed persistently.
 
 repo=Sitten-Tokyo/Sippion
 gh_version=2.97.0
@@ -21,6 +21,7 @@ command -v mktemp >/dev/null 2>&1 || { echo "mktemp is required" >&2; exit 2; }
 command -v awk >/dev/null 2>&1 || { echo "awk is required" >&2; exit 2; }
 command -v sed >/dev/null 2>&1 || { echo "sed is required" >&2; exit 2; }
 command -v grep >/dev/null 2>&1 || { echo "grep is required" >&2; exit 2; }
+command -v find >/dev/null 2>&1 || { echo "find is required" >&2; exit 2; }
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -43,6 +44,24 @@ verify_sha256() {
   fi
 }
 
+fetch_bundle() {
+  digest=$1
+  response=$2
+  bundle=$3
+  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "https://api.github.com/repos/$repo/attestations/sha256:$digest?predicate_type=provenance&per_page=1" \
+    --output "$response"
+  bundle_url=$(sed -n 's/.*"bundle_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$response" | head -n 1 | sed 's/\\u0026/\&/g; s#\\/#/#g')
+  case "$bundle_url" in
+    https://*) ;;
+    *) echo "Could not resolve a valid GitHub attestation bundle URL." >&2; return 1 ;;
+  esac
+  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+    "$bundle_url" --output "$bundle"
+}
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
@@ -51,17 +70,14 @@ arch=$(uname -m)
 case "$os:$arch" in
   Linux:x86_64|Linux:amd64)
     gh_archive="gh_${gh_version}_linux_amd64.tar.gz"
-    gh_relative="gh_${gh_version}_linux_amd64/bin/gh"
     gh_extract=tar
     ;;
   Darwin:arm64|Darwin:aarch64)
     gh_archive="gh_${gh_version}_macOS_arm64.zip"
-    gh_relative="gh_${gh_version}_macOS_arm64/bin/gh"
     gh_extract=zip
     ;;
   Darwin:x86_64|Darwin:amd64)
     gh_archive="gh_${gh_version}_macOS_amd64.zip"
-    gh_relative="gh_${gh_version}_macOS_amd64/bin/gh"
     gh_extract=zip
     ;;
   *)
@@ -99,13 +115,13 @@ case "$gh_extract" in
   tar) tar -xzf "$gh_archive_path" -C "$tmp/gh" ;;
   zip) unzip -q "$gh_archive_path" -d "$tmp/gh" ;;
 esac
-gh_bin="$tmp/gh/$gh_relative"
-[ -x "$gh_bin" ] || { echo "Verified GitHub CLI archive did not contain gh." >&2; exit 2; }
+gh_bin=$(find "$tmp/gh" -type f -name gh -path '*/bin/gh' -print | head -n 1)
+[ -n "$gh_bin" ] && [ -x "$gh_bin" ] || { echo "Verified GitHub CLI archive did not contain an executable gh under bin." >&2; exit 2; }
 
 release_json="$tmp/releases.json"
 curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
   -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  -H 'X-GitHub-Api-Version: 2026-03-10' \
   "https://api.github.com/repos/$repo/releases?per_page=1" --output "$release_json"
 
 tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
@@ -129,8 +145,12 @@ if ! printf '%s\n' "$installer_expected" | grep -Eq '^[0-9A-Fa-f]{64}$'; then
 fi
 installer_expected=$(printf '%s' "$installer_expected" | tr 'A-F' 'a-f')
 verify_sha256 "$installer_expected" "$installer"
+installer_actual=$(sha256_file "$installer")
 
-"$gh_bin" attestation verify "$installer" --repo "$repo" >/dev/null
+installer_attestations="$tmp/installer-attestations.json"
+installer_bundle="$tmp/installer-attestation.bundle.json"
+fetch_bundle "$installer_actual" "$installer_attestations" "$installer_bundle"
+"$gh_bin" attestation verify "$installer" --repo "$repo" --bundle "$installer_bundle" >/dev/null
 
 if [ "$SIPPION_BOOTSTRAP_VERIFY_ONLY" = "1" ]; then
   echo "Verified Sippion bootstrap path for $tag."
