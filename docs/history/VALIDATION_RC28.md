@@ -1,4 +1,4 @@
-# RC28 source-level validation
+# RC28 source-level validation (historical record)
 
 This archive was hardened for multi-agent use without changing the previously deferred release gate.
 

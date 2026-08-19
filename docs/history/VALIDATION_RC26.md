@@ -1,4 +1,4 @@
-# RC26 packaging validation
+# RC26 packaging validation (historical record)
 
 Performed in the packaging environment:
 

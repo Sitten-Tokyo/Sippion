@@ -1,4 +1,4 @@
-# RC29 completeness and cache-privacy hardening
+# RC29 completeness and cache-privacy hardening (historical record)
 
 - Bumped package version to `0.1.0-rc.29`.
 - Separated policy exclusion from adaptive-scan incompleteness without treating policy-excluded files as inspected repository content.

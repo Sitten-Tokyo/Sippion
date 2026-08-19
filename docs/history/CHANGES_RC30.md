@@ -1,4 +1,4 @@
-# RC30 package identity correction
+# RC30 package identity correction (historical record)
 
 - Bumped package version from `0.1.0-rc.29` to `0.1.0-rc.30`.
 - Renamed the distribution root to `Sippion-v0.1-rc30-completeness-cache-hardening`.

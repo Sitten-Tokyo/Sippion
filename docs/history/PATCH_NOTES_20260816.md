@@ -1,4 +1,4 @@
-# 2026-08-16 post-RC29 hardening patch
+# 2026-08-16 post-RC29 hardening patch (historical record)
 
 This patch contains the earlier follow-up fixes **2** and **3**, plus the later fixes **1**, **2**, and **4** requested after deeper review.
 

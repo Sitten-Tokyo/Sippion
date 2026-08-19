@@ -1,8 +1,9 @@
-# Sippion RC29 integration boundaries
+# Sippion integration boundaries
 
-RC29 keeps the previous design references and adds bounded multi-agent structural reuse. No upstream project is vendored or executed at runtime.
+Sippion uses the following design references while keeping all retrieval local.
+No upstream project is vendored or executed at runtime.
 
-| Technique / reference | RC29 use | Deliberately excluded |
+| Technique / reference | Current use | Deliberately excluded |
 |---|---|---|
 | BM25 | RAM-index lexical candidate ranking (`k1=1.2`, `b=0.75`) | external search service |
 | Tree-sitter | bounded AST parsing for already-ranked Rust/Python/JS/TS/Go candidates | whole-repository compiler frontend |
@@ -18,7 +19,10 @@ RC29 keeps the previous design references and adds bounded multi-agent structura
 
 ## Semantic boundary
 
-RC29's Tier 2 resolver is intentionally **source-only**. It records exact syntax-tree identifier references, call/type/implementation contexts, and import paths, then connects those references to declarations already present in the bounded candidate set.
+The Tier 2 resolver is intentionally **source-only**. It records exact
+syntax-tree identifier references, call/type/implementation contexts, and
+import paths, then connects those references to declarations already present in
+the bounded candidate set.
 
 It does **not** execute:
 

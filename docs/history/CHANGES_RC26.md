@@ -1,4 +1,4 @@
-# RC26 Adaptive Semantic changes
+# RC26 adaptive semantic changes (historical record)
 
 - Bumped package version to `0.1.0-rc.26`.
 - Kept the single public MCP tool: `repo_context`.

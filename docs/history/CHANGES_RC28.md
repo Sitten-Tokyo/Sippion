@@ -1,4 +1,4 @@
-# RC28 multi-agent shared-context hardening
+# RC28 multi-agent shared-context hardening (historical record)
 
 - Bumped package version to `0.1.0-rc.28`.
 - Added optional bounded `session_id` and `agent_id` fields to `repo_context`; both are volatile and never persisted.

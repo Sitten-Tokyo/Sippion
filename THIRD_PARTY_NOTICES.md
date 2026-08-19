@@ -24,4 +24,4 @@ Sippion uses third-party Rust crates. The source archive does not vendor those c
 
 Before distributing a release binary, generate and commit `Cargo.lock`, then produce a dependency/license report from the exact locked dependency graph. This file records the direct dependency boundary; `Cargo.lock` is authoritative for exact transitive versions.
 
-The names RTK, codebase-memory-mcp, RepoMapper, Repomix, Engram, and Agent Capability Registry are design references documented in `INTEGRATIONS.md`. Their source code is not vendored by this archive.
+The names RTK, codebase-memory-mcp, RepoMapper, Repomix, Engram, and Agent Capability Registry are design references documented in `docs/integrations.md`. Their source code is not vendored by this archive.
