@@ -46,6 +46,15 @@ jobs:
           unset GH_TOKEN GITHUB_TOKEN
           sh scripts/bootstrap.sh
 
+      - name: Verify Unix release installer without GitHub auth
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          sh scripts/install.sh
+
       - name: Verify Windows bootstrap chain without GitHub auth
         if: runner.os == 'Windows'
         shell: pwsh
@@ -55,3 +64,13 @@ jobs:
           Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
           Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
           & scripts/bootstrap.ps1
+
+      - name: Verify Windows release installer without GitHub auth
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIPPION_INSTALL_VERIFY_ONLY: '1'
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          & scripts/install.ps1
