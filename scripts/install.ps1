@@ -24,28 +24,14 @@ if ($verifyOnlyValue -notin @("0", "1")) {
 }
 $verifyOnly = $verifyOnlyValue -eq "1"
 
-$gh = Get-Command gh -ErrorAction SilentlyContinue
-$ghSupportsAttestation = $false
-if ($gh) {
-    & gh attestation --help *> $null
-    $ghSupportsAttestation = $LASTEXITCODE -eq 0
-}
-if ($requireAttestation -and -not $ghSupportsAttestation) {
-    throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
-}
-
-$releaseHeaders = @{
+$headers = @{
     Accept = "application/vnd.github+json"
     "X-GitHub-Api-Version" = "2026-03-10"
-}
-$attestationHeaders = @{
-    Accept = "application/vnd.github+json"
-    "X-GitHub-Api-Version" = "2022-11-28"
 }
 
 if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
     if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
-        $releases = Invoke-RestMethod -Headers $releaseHeaders -Uri "https://api.github.com/repos/$AttestationRepository/releases?per_page=1"
+        $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$AttestationRepository/releases?per_page=1"
         $ReleaseTag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
     }
     if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
@@ -84,21 +70,19 @@ try {
         throw "Sippion checksum verification failed."
     }
 
-    if ($ghSupportsAttestation) {
-        $attestationResponse = Invoke-RestMethod -Headers $attestationHeaders -Uri "https://api.github.com/repos/$AttestationRepository/attestations/sha256:$actual?predicate_type=provenance&per_page=1"
-        $bundle = $attestationResponse.attestations[0].bundle
-        if ($null -eq $bundle) {
-            throw "GitHub did not return an inline Sippion attestation bundle."
+    if ($requireAttestation) {
+        $gh = Get-Command gh -ErrorAction SilentlyContinue
+        if (-not $gh) {
+            throw "GitHub CLI is required for artifact-attestation verification."
         }
-        $attestationBundle = Join-Path $tempRoot "attestation.bundle.json"
-        $bundle | ConvertTo-Json -Depth 100 -Compress | Set-Content -LiteralPath $attestationBundle -Encoding utf8NoBOM
-        & gh attestation verify $binary --repo $AttestationRepository --bundle $attestationBundle
+        & gh attestation --help *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "A GitHub CLI version with 'gh attestation' support is required."
+        }
+        & gh attestation verify $binary --repo $AttestationRepository
         if ($LASTEXITCODE -ne 0) {
             throw "Sippion GitHub artifact attestation verification failed."
         }
-    }
-    elseif ($requireAttestation) {
-        throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
     }
     else {
         Write-Warning "GitHub artifact attestation verification was explicitly disabled."
