@@ -2,7 +2,7 @@
 set -eu
 
 # Installer for a published Sippion release. By default it resolves the newest
-# published release, including prereleases, through the authenticated GitHub CLI.
+# published release, including prereleases, through GitHub's public REST API.
 # SIPPION_RELEASE_TAG pins installer and binary downloads to one release.
 # SIPPION_RELEASE_BASE_URL is an explicit HTTPS override for mirrors/forks.
 : "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
@@ -18,6 +18,8 @@ esac
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 2; }
 command -v mktemp >/dev/null 2>&1 || { echo "mktemp is required" >&2; exit 2; }
 command -v grep >/dev/null 2>&1 || { echo "grep is required" >&2; exit 2; }
+command -v sed >/dev/null 2>&1 || { echo "sed is required" >&2; exit 2; }
+command -v awk >/dev/null 2>&1 || { echo "awk is required" >&2; exit 2; }
 
 case "$SIPPION_ATTESTATION_REPOSITORY" in
   */*) ;;
@@ -37,15 +39,18 @@ if [ "$SIPPION_REQUIRE_ATTESTATION" = "1" ] && [ "$gh_supports_attestation" != "
   exit 2
 fi
 
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-install.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
 if [ -z "$SIPPION_RELEASE_BASE_URL" ]; then
   if [ -z "$SIPPION_RELEASE_TAG" ]; then
-    if [ "$gh_supports_attestation" != "1" ]; then
-      echo "Set SIPPION_RELEASE_TAG or SIPPION_RELEASE_BASE_URL when GitHub CLI is unavailable." >&2
-      exit 2
-    fi
-    SIPPION_RELEASE_TAG=$(gh api \
-      "repos/$SIPPION_ATTESTATION_REPOSITORY/releases?per_page=100" \
-      --jq 'map(select(.draft == false))[0].tag_name')
+    release_json="$tmp/releases.json"
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "https://api.github.com/repos/$SIPPION_ATTESTATION_REPOSITORY/releases?per_page=1" \
+      --output "$release_json"
+    SIPPION_RELEASE_TAG=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
   fi
 
   if ! printf '%s\n' "$SIPPION_RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
@@ -72,8 +77,6 @@ case "$os:$arch" in
     ;;
 esac
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-install.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 binary="$tmp/$artifact"
 checksum="$tmp/$artifact.sha256"
 base=${SIPPION_RELEASE_BASE_URL%/}
@@ -107,7 +110,23 @@ if [ "$actual" != "$expected" ]; then
 fi
 
 if [ "$gh_supports_attestation" = "1" ]; then
-  if ! gh attestation verify "$binary" --repo "$SIPPION_ATTESTATION_REPOSITORY" >/dev/null; then
+  attestation_json="$tmp/attestations.json"
+  attestation_bundle="$tmp/attestation.bundle.json"
+  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "https://api.github.com/repos/$SIPPION_ATTESTATION_REPOSITORY/attestations/sha256:$actual?predicate_type=provenance&per_page=1" \
+    --output "$attestation_json"
+  bundle_url=$(sed -n 's/.*"bundle_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$attestation_json" | head -n 1 | sed 's/\\u0026/\&/g; s#\\/#/#g')
+  case "$bundle_url" in
+    https://*) ;;
+    *) echo "Could not resolve a valid Sippion attestation bundle URL." >&2; exit 1 ;;
+  esac
+  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+    "$bundle_url" --output "$attestation_bundle"
+  if ! gh attestation verify "$binary" \
+    --repo "$SIPPION_ATTESTATION_REPOSITORY" \
+    --bundle "$attestation_bundle" >/dev/null; then
     echo "Sippion GitHub artifact attestation verification failed." >&2
     exit 1
   fi
