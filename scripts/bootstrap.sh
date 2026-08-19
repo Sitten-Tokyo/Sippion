@@ -3,7 +3,7 @@ set -eu
 
 # Minimal immutable bootstrap for Sippion. It downloads a pinned GitHub CLI into
 # a temporary directory, verifies that CLI against GitHub's published checksum,
-# then uses a public attestation bundle to verify Sippion release provenance.
+# then uses an anonymously fetched inline attestation bundle to verify Sippion.
 # Nothing from the temporary GitHub CLI is installed persistently.
 
 repo=Sitten-Tokyo/Sippion
@@ -44,22 +44,59 @@ verify_sha256() {
   fi
 }
 
-fetch_bundle() {
+extract_inline_bundle() {
+  input=$1
+  output=$2
+  awk '
+    BEGIN { target="\"bundle\""; window=""; found=0; started=0; depth=0; in_string=0; escaped=0 }
+    {
+      text=$0 "\n"
+      for (i=1; i<=length(text); i++) {
+        c=substr(text,i,1)
+        if (!started) {
+          if (!found) {
+            window=window c
+            if (length(window)>length(target)) window=substr(window,length(window)-length(target)+1)
+            if (window==target) found=1
+          } else if (c=="{") {
+            started=1
+            depth=1
+            printf "%s", c
+          }
+          continue
+        }
+        printf "%s", c
+        if (escaped) { escaped=0; continue }
+        if (in_string) {
+          if (c=="\\") escaped=1
+          else if (c=="\"") in_string=0
+          continue
+        }
+        if (c=="\"") in_string=1
+        else if (c=="{") depth++
+        else if (c=="}") {
+          depth--
+          if (depth==0) exit
+        }
+      }
+    }
+  ' "$input" > "$output"
+  [ -s "$output" ] && [ "$(head -c 1 "$output")" = "{" ] || return 1
+}
+
+fetch_inline_bundle() {
   digest=$1
   response=$2
   bundle=$3
   curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
     -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
     "https://api.github.com/repos/$repo/attestations/sha256:$digest?predicate_type=provenance&per_page=1" \
     --output "$response"
-  bundle_url=$(sed -n 's/.*"bundle_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$response" | head -n 1 | sed 's/\\u0026/\&/g; s#\\/#/#g')
-  case "$bundle_url" in
-    https://*) ;;
-    *) echo "Could not resolve a valid GitHub attestation bundle URL." >&2; return 1 ;;
-  esac
-  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-    "$bundle_url" --output "$bundle"
+  if ! extract_inline_bundle "$response" "$bundle"; then
+    echo "GitHub did not return an inline attestation bundle." >&2
+    return 1
+  fi
 }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
@@ -149,7 +186,7 @@ installer_actual=$(sha256_file "$installer")
 
 installer_attestations="$tmp/installer-attestations.json"
 installer_bundle="$tmp/installer-attestation.bundle.json"
-fetch_bundle "$installer_actual" "$installer_attestations" "$installer_bundle"
+fetch_inline_bundle "$installer_actual" "$installer_attestations" "$installer_bundle"
 "$gh_bin" attestation verify "$installer" --repo "$repo" --bundle "$installer_bundle" >/dev/null
 
 if [ "$SIPPION_BOOTSTRAP_VERIFY_ONLY" = "1" ]; then
