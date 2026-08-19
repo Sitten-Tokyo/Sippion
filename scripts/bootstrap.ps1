@@ -53,9 +53,11 @@ try {
 
     $ghExtractRoot = Join-Path $tempRoot "gh"
     Expand-Archive -LiteralPath $ghArchivePath -DestinationPath $ghExtractRoot -Force
-    $ghBin = Join-Path $ghExtractRoot "gh_${ghVersion}_windows_amd64\bin\gh.exe"
-    if (-not (Test-Path -LiteralPath $ghBin -PathType Leaf)) {
-        throw "Verified GitHub CLI archive did not contain gh.exe."
+    $ghBin = Get-ChildItem -LiteralPath $ghExtractRoot -Recurse -File -Filter "gh.exe" |
+        Where-Object { $_.Directory.Name -eq "bin" } |
+        Select-Object -First 1 -ExpandProperty FullName
+    if ([string]::IsNullOrWhiteSpace($ghBin) -or -not (Test-Path -LiteralPath $ghBin -PathType Leaf)) {
+        throw "Verified GitHub CLI archive did not contain gh.exe under a bin directory."
     }
 
     $headers = @{
