@@ -4,59 +4,117 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, for example v0.1.0-rc.30
+        description: Existing release tag to build, for example v0.1.0-rc.31
         required: true
         type: string
+  push:
+    branches:
+      - 'release/v*'
 
 permissions:
   contents: read
 
 jobs:
-  validate-tag:
-    name: Validate and resolve release tag
+  prepare-release:
+    name: Validate and resolve release target
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
     outputs:
-      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      sha: ${{ steps.prepare.outputs.sha }}
     steps:
-      - name: Resolve tag to immutable commit
-        id: resolve
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate and resolve release target
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          CURRENT_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "Invalid release tag: $RELEASE_TAG" >&2
+
+          resolve_tag() {
+            local release_tag=$1
+            local ref_endpoint="repos/$REPOSITORY/git/ref/tags/$release_tag"
+            local object_type
+            local object_sha
+            object_type=$(gh api "$ref_endpoint" --jq '.object.type')
+            object_sha=$(gh api "$ref_endpoint" --jq '.object.sha')
+            while [ "$object_type" = "tag" ]; do
+              local tag_endpoint="repos/$REPOSITORY/git/tags/$object_sha"
+              object_type=$(gh api "$tag_endpoint" --jq '.object.type')
+              object_sha=$(gh api "$tag_endpoint" --jq '.object.sha')
+            done
+            if [ "$object_type" != "commit" ] || ! [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Release tag $release_tag does not resolve to a commit SHA." >&2
+              return 2
+            fi
+            printf '%s\n' "$object_sha"
+          }
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            case "$REF_NAME" in
+              release/v*) release_tag=${REF_NAME#release/} ;;
+              *) echo "Unexpected release trigger branch: $REF_NAME" >&2; exit 2 ;;
+            esac
+          else
+            release_tag=$INPUT_TAG
+          fi
+
+          if ! [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $release_tag" >&2
             exit 2
           fi
 
-          ref_endpoint="repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG"
-          object_type=$(gh api "$ref_endpoint" --jq '.object.type')
-          object_sha=$(gh api "$ref_endpoint" --jq '.object.sha')
+          if [ "$EVENT_NAME" = "push" ]; then
+            main_sha=$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+            if [ "$CURRENT_SHA" != "$main_sha" ]; then
+              echo "Release branch must point exactly at current main ($main_sha), got $CURRENT_SHA." >&2
+              exit 2
+            fi
 
-          while [ "$object_type" = "tag" ]; do
-            tag_sha=$object_sha
-            tag_endpoint="repos/$REPOSITORY/git/tags/$tag_sha"
-            object_type=$(gh api "$tag_endpoint" --jq '.object.type')
-            object_sha=$(gh api "$tag_endpoint" --jq '.object.sha')
-          done
+            expected_version=${release_tag#v}
+            manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+            if [ "$manifest_version" != "$expected_version" ]; then
+              echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+              exit 2
+            fi
 
-          if [ "$object_type" != "commit" ] || ! [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Release tag $RELEASE_TAG does not resolve to a commit SHA." >&2
-            exit 2
+            if gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" >/dev/null 2>&1; then
+              resolved_sha=$(resolve_tag "$release_tag")
+              if [ "$resolved_sha" != "$CURRENT_SHA" ]; then
+                echo "Existing tag $release_tag points to $resolved_sha, expected $CURRENT_SHA." >&2
+                exit 2
+              fi
+            else
+              gh api --method POST "repos/$REPOSITORY/git/refs" \
+                -f ref="refs/tags/$release_tag" \
+                -f sha="$CURRENT_SHA" >/dev/null
+              resolved_sha=$(resolve_tag "$release_tag")
+            fi
+          else
+            resolved_sha=$(resolve_tag "$release_tag")
           fi
-          echo "sha=$object_sha" >> "$GITHUB_OUTPUT"
+
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$resolved_sha" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build draft release artifacts
-    needs: validate-tag
+    name: Build release artifacts
+    needs: prepare-release
     uses: ./.github/workflows/release-build.yml
     with:
-      ref: ${{ needs.validate-tag.outputs.sha }}
+      ref: ${{ needs.prepare-release.outputs.sha }}
     permissions:
       contents: read
       id-token: write
@@ -64,7 +122,7 @@ jobs:
 
   draft-release:
     name: Create draft release
-    needs: [validate-tag, build]
+    needs: [prepare-release, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -74,7 +132,7 @@ jobs:
       - name: Check out tagged installer sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate-tag.outputs.sha }}
+          ref: ${{ needs.prepare-release.outputs.sha }}
           persist-credentials: false
 
       - name: Download platform artifacts
@@ -119,15 +177,50 @@ jobs:
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists." >&2
+            exit 2
+          fi
           gh release create "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
             --verify-tag \
             --draft \
+            --generate-notes \
             --title "Sippion $RELEASE_TAG" \
-            --notes "Draft release created manually. Review the four platform binaries, installers, checksums, and GitHub artifact attestations before publishing." \
             release-assets/*
+
+  publish-release:
+    name: Publish branch-triggered pre-release
+    if: github.event_name == 'push'
+    needs: [prepare-release, draft-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --draft=false \
+            --prerelease
+
+      - name: Delete one-shot release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method DELETE "repos/$REPOSITORY/git/refs/heads/$REF_NAME" || true
