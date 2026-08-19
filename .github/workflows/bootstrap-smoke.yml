@@ -106,21 +106,21 @@ jobs:
         run: |
           Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
           Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-          $home = Join-Path $env:RUNNER_TEMP "sippion-home"
+          $fakeHome = Join-Path $env:RUNNER_TEMP "sippion-home"
           $bin = Join-Path $env:RUNNER_TEMP "sippion-bin"
-          New-Item -ItemType Directory -Force -Path $home | Out-Null
-          $env:USERPROFILE = $home
-          $env:LOCALAPPDATA = Join-Path $home "AppData\Local"
+          New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+          $env:USERPROFILE = $fakeHome
+          $env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
           $env:SIPPION_INSTALL_DIR = $bin
           & scripts/bootstrap.ps1
           if (-not (Test-Path -LiteralPath (Join-Path $bin "sippion.exe") -PathType Leaf)) { throw "Sippion binary was not installed." }
           foreach ($path in @(
-            (Join-Path $home ".codex\config.toml"),
-            (Join-Path $home ".claude.json"),
-            (Join-Path $home ".gemini\config\mcp_config.json"),
-            (Join-Path $home ".codex\AGENTS.md"),
-            (Join-Path $home ".claude\CLAUDE.md"),
-            (Join-Path $home ".gemini\GEMINI.md")
+            (Join-Path $fakeHome ".codex\config.toml"),
+            (Join-Path $fakeHome ".claude.json"),
+            (Join-Path $fakeHome ".gemini\config\mcp_config.json"),
+            (Join-Path $fakeHome ".codex\AGENTS.md"),
+            (Join-Path $fakeHome ".claude\CLAUDE.md"),
+            (Join-Path $fakeHome ".gemini\GEMINI.md")
           )) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Expected setup file missing: $path" }
           }
