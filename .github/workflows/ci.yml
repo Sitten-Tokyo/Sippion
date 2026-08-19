@@ -38,22 +38,26 @@ jobs:
       - name: Validate Unix installer syntax
         if: runner.os != 'Windows'
         shell: sh
-        run: sh -n scripts/install.sh
+        run: |
+          sh -n scripts/bootstrap.sh
+          sh -n scripts/install.sh
 
       - name: Validate PowerShell installer syntax
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "scripts/install.ps1"),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -ne 0) {
-            $errors | ForEach-Object { Write-Error $_ }
-            exit 1
+          foreach ($path in @("scripts/bootstrap.ps1", "scripts/install.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              exit 1
+            }
           }
 
       - name: Check formatting
