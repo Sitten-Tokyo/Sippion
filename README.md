@@ -32,42 +32,55 @@ See [Security and trust boundary](docs/security.md) for the complete boundary.
 ## Install
 
 Published release binaries and installers carry GitHub artifact attestations.
-The recommended installation path downloads the installer first, verifies its
-provenance, and only then executes it. A recent GitHub CLI (`gh`) is required
-for provenance verification.
+The recommended installation path asks the GitHub API for the newest published
+release, including prereleases, pins the installer and binary to that same tag,
+verifies installer provenance, and only then executes it. A recent GitHub CLI
+(`gh`) is required for provenance verification.
 
 macOS / Linux:
 
 ```sh
+repo=Sitten-Tokyo/Sippion
+tag=$(gh api "repos/$repo/releases?per_page=100" \
+  --jq 'map(select(.draft == false))[0].tag_name') || exit 1
+printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || exit 1
 tmp=$(mktemp -d)
 curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
-  https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.sh \
+  "https://github.com/$repo/releases/download/$tag/install.sh" \
   -o "$tmp/install.sh"
-gh attestation verify "$tmp/install.sh" --repo Sitten-Tokyo/Sippion
-sh "$tmp/install.sh"
+gh attestation verify "$tmp/install.sh" --repo "$repo" || { rm -rf "$tmp"; exit 1; }
+SIPPION_RELEASE_TAG="$tag" sh "$tmp/install.sh"
 rm -rf "$tmp"
 ```
 
 Windows PowerShell:
 
 ```powershell
+$repo = "Sitten-Tokyo/Sippion"
+$tagOutput = & gh api "repos/$repo/releases?per_page=100" --jq 'map(select(.draft == false))[0].tag_name'
+if ($LASTEXITCODE -ne 0) { throw "Could not resolve the newest published Sippion release." }
+$tag = ($tagOutput | Out-String).Trim()
+if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') { throw "Invalid release tag: $tag" }
 $tmp = Join-Path $env:TEMP ("sippion-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $installer = Join-Path $tmp "install.ps1"
-Invoke-WebRequest "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.ps1" -OutFile $installer
-gh attestation verify $installer --repo Sitten-Tokyo/Sippion
-& $installer
+Invoke-WebRequest "https://github.com/$repo/releases/download/$tag/install.ps1" -OutFile $installer
+& gh attestation verify $installer --repo $repo
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Recurse -Force; throw "Installer attestation verification failed." }
+& $installer -ReleaseTag $tag -AttestationRepository $repo
 Remove-Item -LiteralPath $tmp -Recurse -Force
 ```
 
 The installers also verify the matching per-platform SHA-256 file, install in
 the current user scope, and run `sippion setup`. Binary artifact-attestation
 verification is required by default and fails closed if a recent `gh` CLI is
-not available. `SIPPION_REQUIRE_ATTESTATION=0` is an explicit local opt-out and
-prints a warning; it should be used only when provenance has been verified by
-another trusted mechanism. Release assets also include `install.sh.sha256`,
-`install.ps1.sha256`, per-platform `.sha256` files, and an aggregate
-`SHA256SUMS` file.
+not available. `SIPPION_RELEASE_TAG` pins binary downloads to the same release
+as a verified installer; `SIPPION_RELEASE_BASE_URL` is an explicit HTTPS
+override for mirrors or controlled forks. `SIPPION_REQUIRE_ATTESTATION=0` is an
+explicit local opt-out and prints a warning; it should be used only when
+provenance has been verified by another trusted mechanism. Release assets also
+include `install.sh.sha256`, `install.ps1.sha256`, per-platform `.sha256` files,
+and an aggregate `SHA256SUMS` file.
 
 See [client setup](docs/clients.md) for manual registration, diagnostics, and
 uninstall details.
@@ -133,8 +146,12 @@ sippion-macos-x86_64
 ```
 
 Run `.github/workflows/release-draft.yml` manually with an existing tag to
-build, checksum, attest, and assemble a GitHub draft release for review. The
-workflow also publishes the tag's `install.sh` and `install.ps1` as attested
+build, checksum, attest, and assemble a GitHub draft release for review. For an
+automated prerelease after an approved version bump is on `main`, create a
+one-shot `release/vX.Y.Z[-prerelease]` branch pointing exactly at current
+`main`; the workflow validates the manifest version, creates or verifies the
+tag, publishes the attested prerelease, and deletes that branch after success.
+The workflow publishes the tag's `install.sh` and `install.ps1` as attested
 release assets. The separate `.github/workflows/release-artifacts.yml` workflow
 remains as a manual artifact-only path for reviewing or attaching the four
 build outputs; both workflows share the reusable build definition in
