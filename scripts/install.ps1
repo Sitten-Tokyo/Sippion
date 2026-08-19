@@ -11,10 +11,11 @@ if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
 if ([string]::IsNullOrWhiteSpace($AttestationRepository)) {
     $AttestationRepository = "Sitten-Tokyo/Sippion"
 }
-if ($env:SIPPION_REQUIRE_ATTESTATION -and $env:SIPPION_REQUIRE_ATTESTATION -notin @("0", "1")) {
+$requireAttestationValue = if ($env:SIPPION_REQUIRE_ATTESTATION) { $env:SIPPION_REQUIRE_ATTESTATION } else { "1" }
+if ($requireAttestationValue -notin @("0", "1")) {
     throw "SIPPION_REQUIRE_ATTESTATION must be 0 or 1."
 }
-$requireAttestation = $env:SIPPION_REQUIRE_ATTESTATION -eq "1"
+$requireAttestation = $requireAttestationValue -eq "1"
 
 $baseUri = [Uri]$ReleaseBaseUrl
 if (-not $baseUri.IsAbsoluteUri -or $baseUri.Scheme -ne "https") {
@@ -59,10 +60,10 @@ try {
         }
     }
     elseif ($requireAttestation) {
-        throw "GitHub CLI with 'gh attestation' support is required for strict provenance verification."
+        throw "GitHub CLI with 'gh attestation' support is required for provenance verification."
     }
     else {
-        Write-Warning "GitHub artifact attestation was not verified; install a recent 'gh' CLI or set SIPPION_REQUIRE_ATTESTATION=1 for strict verification."
+        Write-Warning "GitHub artifact attestation verification was explicitly disabled."
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
