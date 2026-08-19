@@ -37,18 +37,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Unix bootstrap chain
+      - name: Verify Unix bootstrap chain without GitHub auth
         if: runner.os != 'Windows'
         shell: sh
         env:
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
-          GH_TOKEN: ${{ github.token }}
-        run: sh scripts/bootstrap.sh
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          sh scripts/bootstrap.sh
 
-      - name: Verify Windows bootstrap chain
+      - name: Verify Windows bootstrap chain without GitHub auth
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
-          GH_TOKEN: ${{ github.token }}
-        run: '& scripts/bootstrap.ps1'
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          & scripts/bootstrap.ps1
