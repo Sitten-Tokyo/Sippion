@@ -1,11 +1,24 @@
 [CmdletBinding()]
 param(
-    [string]$ReleaseBaseUrl = $env:SIPPION_RELEASE_BASE_URL
+    [string]$ReleaseBaseUrl = $env:SIPPION_RELEASE_BASE_URL,
+    [string]$AttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
 )
 
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($ReleaseBaseUrl)) {
     $ReleaseBaseUrl = "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download"
+}
+if ([string]::IsNullOrWhiteSpace($AttestationRepository)) {
+    $AttestationRepository = "Sitten-Tokyo/Sippion"
+}
+if ($env:SIPPION_REQUIRE_ATTESTATION -and $env:SIPPION_REQUIRE_ATTESTATION -notin @("0", "1")) {
+    throw "SIPPION_REQUIRE_ATTESTATION must be 0 or 1."
+}
+$requireAttestation = $env:SIPPION_REQUIRE_ATTESTATION -eq "1"
+
+$baseUri = [Uri]$ReleaseBaseUrl
+if (-not $baseUri.IsAbsoluteUri -or $baseUri.Scheme -ne "https") {
+    throw "ReleaseBaseUrl must be an absolute HTTPS URL."
 }
 if ($env:PROCESSOR_ARCHITECTURE -notin @("AMD64", "x86_64")) {
     throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE. Windows x86_64 MSVC is currently supported."
@@ -25,9 +38,31 @@ try {
     Invoke-WebRequest -Uri "$base/$artifact.sha256" -OutFile $checksum
 
     $expected = ((Get-Content -Raw -LiteralPath $checksum) -split "\s+")[0].ToLowerInvariant()
+    if ($expected -notmatch "^[0-9a-f]{64}$") {
+        throw "The release checksum is not a valid SHA-256 digest."
+    }
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $binary).Hash.ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($expected) -or $actual -ne $expected) {
+    if ($actual -ne $expected) {
         throw "Sippion checksum verification failed."
+    }
+
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    $ghSupportsAttestation = $false
+    if ($gh) {
+        & gh attestation --help *> $null
+        $ghSupportsAttestation = $LASTEXITCODE -eq 0
+    }
+    if ($ghSupportsAttestation) {
+        & gh attestation verify $binary --repo $AttestationRepository
+        if ($LASTEXITCODE -ne 0) {
+            throw "Sippion GitHub artifact attestation verification failed."
+        }
+    }
+    elseif ($requireAttestation) {
+        throw "GitHub CLI with 'gh attestation' support is required for strict provenance verification."
+    }
+    else {
+        Write-Warning "GitHub artifact attestation was not verified; install a recent 'gh' CLI or set SIPPION_REQUIRE_ATTESTATION=1 for strict verification."
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
