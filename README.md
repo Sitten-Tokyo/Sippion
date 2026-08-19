@@ -54,9 +54,7 @@ Windows PowerShell:
 $tmp = Join-Path $env:TEMP ("sippion-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $installer = Join-Path $tmp "install.ps1"
-Invoke-WebRequest \
-  "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.ps1" \
-  -OutFile $installer
+Invoke-WebRequest "https://github.com/Sitten-Tokyo/Sippion/releases/latest/download/install.ps1" -OutFile $installer
 gh attestation verify $installer --repo Sitten-Tokyo/Sippion
 $env:SIPPION_REQUIRE_ATTESTATION = "1"
 & $installer
