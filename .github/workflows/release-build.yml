@@ -11,11 +11,17 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -39,12 +45,13 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
         with:
           components: rustfmt, clippy
 
@@ -64,12 +71,15 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            shasum -a 256 "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
-          else
-            sha256sum "dist/${{ matrix.artifact }}" > dist/SHA256SUMS
-          fi
-          cp dist/SHA256SUMS "dist/${{ matrix.artifact }}.sha256"
+          (
+            cd dist
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              shasum -a 256 "${{ matrix.artifact }}" > SHA256SUMS
+            else
+              sha256sum "${{ matrix.artifact }}" > SHA256SUMS
+            fi
+            cp SHA256SUMS "${{ matrix.artifact }}.sha256"
+          )
 
       - name: Stage Windows artifact and checksum
         if: runner.os == 'Windows'
@@ -81,8 +91,13 @@ jobs:
           "$hash  ${{ matrix.artifact }}" | Set-Content -Encoding ascii dist/SHA256SUMS
           Copy-Item dist/SHA256SUMS "dist/${{ matrix.artifact }}.sha256"
 
+      - name: Attest release binary provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/${{ matrix.artifact }}
+
       - name: Upload platform artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/

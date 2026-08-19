@@ -1,11 +1,17 @@
 #!/bin/sh
 set -eu
 
-# One-line installer for a published Sippion release.
-# The release URL is intentionally configurable because the OSS repository owner
-# may differ between forks. Set SIPPION_RELEASE_BASE_URL in the one-liner or
-# replace the default after publishing the canonical repository.
+# Installer for a published Sippion release. The release URL is configurable for
+# forks, but downloads are HTTPS-only. GitHub artifact attestations are required
+# by default; set SIPPION_REQUIRE_ATTESTATION=0 only for an explicit local opt-out.
 : "${SIPPION_RELEASE_BASE_URL:=https://github.com/Sitten-Tokyo/Sippion/releases/latest/download}"
+: "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
+: "${SIPPION_REQUIRE_ATTESTATION:=1}"
+
+case "$SIPPION_REQUIRE_ATTESTATION" in
+  0|1) ;;
+  *) echo "SIPPION_REQUIRE_ATTESTATION must be 0 or 1." >&2; exit 2 ;;
+esac
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -28,16 +34,24 @@ binary="$tmp/$artifact"
 checksum="$tmp/$artifact.sha256"
 base=${SIPPION_RELEASE_BASE_URL%/}
 
-curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
   "$base/$artifact" --output "$binary"
-curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
   "$base/$artifact.sha256" --output "$checksum"
 
 expected=$(awk 'NR == 1 { print $1; exit }' "$checksum")
-if [ -z "$expected" ]; then
-  echo "The release checksum is empty." >&2
+case "$expected" in
+  ''|*[!0-9A-Fa-f]*)
+    echo "The release checksum is not a valid SHA-256 digest." >&2
+    exit 2
+    ;;
+esac
+if [ "${#expected}" -ne 64 ]; then
+  echo "The release checksum is not a valid SHA-256 digest." >&2
   exit 2
 fi
+expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
+
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$binary" | awk '{ print $1 }')
 else
@@ -46,6 +60,18 @@ fi
 if [ "$actual" != "$expected" ]; then
   echo "Sippion checksum verification failed." >&2
   exit 1
+fi
+
+if command -v gh >/dev/null 2>&1 && gh attestation --help >/dev/null 2>&1; then
+  if ! gh attestation verify "$binary" --repo "$SIPPION_ATTESTATION_REPOSITORY" >/dev/null; then
+    echo "Sippion GitHub artifact attestation verification failed." >&2
+    exit 1
+  fi
+elif [ "$SIPPION_REQUIRE_ATTESTATION" = "1" ]; then
+  echo "GitHub CLI with 'gh attestation' support is required for provenance verification." >&2
+  exit 2
+else
+  echo "Warning: GitHub artifact attestation verification was explicitly disabled." >&2
 fi
 
 install_dir=${SIPPION_INSTALL_DIR:-"$HOME/.local/bin"}

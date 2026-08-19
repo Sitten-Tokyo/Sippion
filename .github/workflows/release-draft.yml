@@ -12,23 +12,73 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build draft release artifacts
-    uses: ./.github/workflows/release-build.yml
-    with:
-      ref: ${{ inputs.tag }}
+  validate-tag:
+    name: Validate and resolve release tag
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve tag to immutable commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          fi
+
+          ref_endpoint="repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG"
+          object_type=$(gh api "$ref_endpoint" --jq '.object.type')
+          object_sha=$(gh api "$ref_endpoint" --jq '.object.sha')
+
+          while [ "$object_type" = "tag" ]; do
+            tag_sha=$object_sha
+            tag_endpoint="repos/$REPOSITORY/git/tags/$tag_sha"
+            object_type=$(gh api "$tag_endpoint" --jq '.object.type')
+            object_sha=$(gh api "$tag_endpoint" --jq '.object.sha')
+          done
+
+          if [ "$object_type" != "commit" ] || ! [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release tag $RELEASE_TAG does not resolve to a commit SHA." >&2
+            exit 2
+          fi
+          echo "sha=$object_sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build draft release artifacts
+    needs: validate-tag
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ needs.validate-tag.outputs.sha }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
   draft-release:
     name: Create draft release
-    needs: build
+    needs: [validate-tag, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      - name: Check out tagged installer sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate-tag.outputs.sha }}
+          persist-credentials: false
+
       - name: Download platform artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: sippion-*
           path: downloaded
@@ -48,19 +98,36 @@ jobs:
               esac
             done
           done
+          cp scripts/install.sh release-assets/install.sh
+          cp scripts/install.ps1 release-assets/install.ps1
+          (
+            cd release-assets
+            sha256sum install.sh > install.sh.sha256
+            sha256sum install.ps1 > install.ps1.sha256
+            cat install.sh.sha256 install.ps1.sha256 >> SHA256SUMS
+          )
           test -n "$(find release-assets -type f -name 'sippion-*' -print -quit)"
           test -s release-assets/SHA256SUMS
+
+      - name: Attest installer provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            release-assets/install.sh
+            release-assets/install.ps1
 
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${{ inputs.tag }}" \
-            --repo "${{ github.repository }}" \
+          gh release create "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
             --verify-tag \
             --draft \
-            --title "Sippion ${{ inputs.tag }}" \
-            --notes "Draft release created manually. Review the four platform binaries and checksums, then publish it from GitHub when approved." \
+            --title "Sippion $RELEASE_TAG" \
+            --notes "Draft release created manually. Review the four platform binaries, installers, checksums, and GitHub artifact attestations before publishing." \
             release-assets/*
