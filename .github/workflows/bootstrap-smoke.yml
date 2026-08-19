@@ -42,6 +42,7 @@ jobs:
         shell: sh
         env:
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          GH_TOKEN: ${{ github.token }}
         run: sh scripts/bootstrap.sh
 
       - name: Verify Windows bootstrap chain
@@ -49,4 +50,5 @@ jobs:
         shell: pwsh
         env:
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          GH_TOKEN: ${{ github.token }}
         run: '& scripts/bootstrap.ps1'
