@@ -15,7 +15,8 @@ const PROJECT_MARKERS: &[&str] = &[
 ];
 
 pub(crate) fn infer_project_root_from_cwd() -> Result<PathBuf, String> {
-    let cwd = env::current_dir().map_err(|error| format!("cannot determine current directory: {error}"))?;
+    let cwd = env::current_dir()
+        .map_err(|error| format!("cannot determine current directory: {error}"))?;
     let home = home_dir().and_then(|path| fs::canonicalize(path).ok());
     infer_project_root(&cwd, home.as_deref())
 }
@@ -33,8 +34,8 @@ fn secure_explicit_root_with_home(
     allow_broad_root: bool,
     home: Option<&Path>,
 ) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(root)
-        .map_err(|error| format!("cannot resolve project root: {error}"))?;
+    let canonical =
+        fs::canonicalize(root).map_err(|error| format!("cannot resolve project root: {error}"))?;
     if !canonical.is_dir() {
         return Err("project root must be a directory".to_string());
     }
