@@ -257,6 +257,8 @@ fn replace_bytes_without_backup(path: &Path, contents: &[u8]) -> Result<(), Stri
     fs::write(&temporary, contents)
         .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
     let existed = path.exists();
+    #[cfg(not(windows))]
+    let _ = existed;
 
     #[cfg(windows)]
     let result = if existed {
