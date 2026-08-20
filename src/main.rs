@@ -7,6 +7,8 @@ mod repo;
 mod service;
 mod setup;
 mod syntax;
+#[cfg(test)]
+mod redaction_corpus_tests;
 
 use std::path::PathBuf;
 use std::sync::Arc;
