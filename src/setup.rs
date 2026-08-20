@@ -7,6 +7,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+mod doctor;
+mod transaction;
+#[cfg(test)]
+mod tests;
+
+use transaction::SetupSnapshot;
+
 const SERVER_NAME: &str = "sippion";
 const MANAGED_BEGIN: &str = "# BEGIN SIPPION MANAGED CONFIG";
 const MANAGED_END: &str = "# END SIPPION MANAGED CONFIG";
@@ -33,20 +40,26 @@ struct SetupReport {
 pub fn run_setup() -> Result<(), String> {
     let executable = installed_executable()?;
     let home = home_dir()?;
+    run_setup_at(&home, &executable)
+}
+
+fn run_setup_at(home: &Path, executable: &Path) -> Result<(), String> {
+    let targets = setup_target_paths(home);
+    let snapshot = SetupSnapshot::capture(&targets)?;
     let reports = vec![
         SetupReport {
             name: "Codex",
-            config: setup_codex(&home, &executable),
+            config: setup_codex(home, executable),
             rules: setup_rules(&home.join(".codex").join("AGENTS.md")),
         },
         SetupReport {
             name: "Claude Code",
-            config: setup_claude(&home, &executable),
+            config: setup_claude(home, executable),
             rules: setup_rules(&home.join(".claude").join("CLAUDE.md")),
         },
         SetupReport {
             name: "Antigravity",
-            config: setup_antigravity(&home, &executable),
+            config: setup_antigravity(home, executable),
             rules: setup_rules(&home.join(".gemini").join("GEMINI.md")),
         },
     ];
@@ -62,12 +75,21 @@ pub fn run_setup() -> Result<(), String> {
         }
     }
     println!();
-    println!("Sippion setup completed for the current user.");
-    println!("Restart Codex, Claude Code, and Antigravity to reload MCP settings.");
     if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("setup incomplete: {}", failures.join("; ")))
+        println!("Sippion setup completed for the current user.");
+        println!("Restart Codex, Claude Code, and Antigravity to reload MCP settings.");
+        return Ok(());
+    }
+
+    match snapshot.restore() {
+        Ok(()) => Err(format!(
+            "setup incomplete; all managed setup files were restored: {}",
+            failures.join("; ")
+        )),
+        Err(rollback_error) => Err(format!(
+            "setup incomplete: {}; rollback incomplete: {rollback_error}",
+            failures.join("; ")
+        )),
     }
 }
 
@@ -77,17 +99,21 @@ pub fn run_doctor() -> Result<(), String> {
     println!("Sippion {}", crate::core::VERSION);
     println!("binary: {}", executable.display());
     println!();
-    check_codex(&home, &executable);
-    check_claude(&home, &executable);
-    check_antigravity(&home, &executable);
-    check_rule(&home.join(".codex").join("AGENTS.md"), "Codex");
-    check_rule(&home.join(".claude").join("CLAUDE.md"), "Claude Code");
-    check_rule(&home.join(".gemini").join("GEMINI.md"), "Antigravity");
-    Ok(())
+    if doctor::run_checks(&home, &executable) {
+        Ok(())
+    } else {
+        Err("doctor found missing, mismatched, or unreadable Sippion client configuration".to_string())
+    }
 }
 
 pub fn run_uninstall() -> Result<(), String> {
     let home = home_dir()?;
+    run_uninstall_at(&home)
+}
+
+fn run_uninstall_at(home: &Path) -> Result<(), String> {
+    let targets = setup_target_paths(home);
+    let snapshot = SetupSnapshot::capture(&targets)?;
     let mut failures = Vec::new();
     for (name, path, kind) in [
         (
@@ -137,10 +163,30 @@ pub fn run_uninstall() -> Result<(), String> {
         println!(
             "Sippion client configuration removed. The Sippion binary itself was not deleted."
         );
-        Ok(())
-    } else {
-        Err(format!("uninstall incomplete: {}", failures.join("; ")))
+        return Ok(());
     }
+
+    match snapshot.restore() {
+        Ok(()) => Err(format!(
+            "uninstall incomplete; all managed setup files were restored: {}",
+            failures.join("; ")
+        )),
+        Err(rollback_error) => Err(format!(
+            "uninstall incomplete: {}; rollback incomplete: {rollback_error}",
+            failures.join("; ")
+        )),
+    }
+}
+
+fn setup_target_paths(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join(".codex").join("config.toml"),
+        home.join(".claude.json"),
+        home.join(".gemini").join("config").join("mcp_config.json"),
+        home.join(".codex").join("AGENTS.md"),
+        home.join(".claude").join("CLAUDE.md"),
+        home.join(".gemini").join("GEMINI.md"),
+    ]
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -439,12 +485,19 @@ fn write_json_if_changed(path: &Path, value: &Value) -> Result<FileChange, Strin
 }
 
 fn write_bytes_with_backup(path: &Path, contents: &[u8]) -> Result<FileChange, String> {
+    replace_file_contents(path, contents, true)?;
+    Ok(FileChange::Updated)
+}
+
+fn replace_file_contents(path: &Path, contents: &[u8], refresh_backup: bool) -> Result<(), String> {
+    ensure_safe_parent_chain(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    let existed = path.exists();
-    if existed {
+    ensure_safe_parent_chain(path)?;
+    let existed = ensure_regular_mutation_target(path)?;
+    if refresh_backup && existed {
         backup_current(path)?;
     }
     let temporary = temporary_path(path, "tmp");
@@ -466,16 +519,67 @@ fn write_bytes_with_backup(path: &Path, contents: &[u8]) -> Result<FileChange, S
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result?;
-    Ok(FileChange::Updated)
+    result
 }
 
-fn backup_current(path: &Path) -> Result<(), String> {
+fn ensure_safe_parent_chain(path: &Path) -> Result<(), String> {
+    let mut current = path.parent();
+    while let Some(parent) = current {
+        match fs::symlink_metadata(parent) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "refusing to modify {} through symlinked parent {}",
+                        path.display(),
+                        parent.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "cannot modify {}; parent is not a directory: {}",
+                        path.display(),
+                        parent.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("cannot inspect {}: {error}", parent.display()));
+            }
+        }
+        current = parent.parent();
+    }
+    Ok(())
+}
+
+fn ensure_regular_mutation_target(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "refusing to replace non-regular setup path {}",
+                    path.display()
+                ));
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+    }
+}
+
+fn backup_path(path: &Path) -> Result<PathBuf, String> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| format!("cannot create a backup for {}", path.display()))?;
-    let backup = path.with_file_name(format!("{name}.sippion-backup"));
+    Ok(path.with_file_name(format!("{name}.sippion-backup")))
+}
+
+fn backup_current(path: &Path) -> Result<(), String> {
+    let backup = backup_path(path)?;
+    ensure_safe_parent_chain(&backup)?;
+    let _ = ensure_regular_mutation_target(&backup)?;
     fs::copy(path, &backup)
         .map(|_| ())
         .map_err(|error| format!("cannot refresh backup {}: {error}", backup.display()))
@@ -591,174 +695,5 @@ fn print_result(label: &str, result: &Result<FileChange, String>) {
         Ok(FileChange::Unchanged) => println!("{label}: ready"),
         Ok(FileChange::Updated) => println!("{label}: configured"),
         Err(error) => println!("{label}: ERROR ({error})"),
-    }
-}
-
-fn check_codex(home: &Path, executable: &Path) {
-    let path = home.join(".codex").join("config.toml");
-    match read_optional_text(&path) {
-        Ok(Some(contents)) => {
-            if (contents.contains(MANAGED_BEGIN) || contents.contains(MANAGED_END))
-                && managed_block_range(&contents, MANAGED_BEGIN, MANAGED_END).is_err()
-            {
-                println!("Codex MCP config: ERROR (malformed Sippion managed markers)");
-                return;
-            }
-            if !contents.contains("[mcp_servers.sippion]") {
-                println!("Codex MCP config: MISSING");
-                return;
-            }
-            let command = executable_string(executable).unwrap_or_default();
-            let ok = contents.contains("[mcp_servers.sippion]")
-                && contents.contains(&toml_string(&command));
-            println!("Codex MCP config: {}", if ok { "OK" } else { "MISMATCH" });
-        }
-        Ok(None) => println!("Codex MCP config: MISSING"),
-        Err(error) => println!("Codex MCP config: ERROR ({error})"),
-    }
-}
-
-fn check_claude(home: &Path, executable: &Path) {
-    check_json_server(
-        &home.join(".claude.json"),
-        executable,
-        "Claude Code MCP config",
-        true,
-    );
-}
-
-fn check_antigravity(home: &Path, executable: &Path) {
-    check_json_server(
-        &home.join(".gemini").join("config").join("mcp_config.json"),
-        executable,
-        "Antigravity MCP config",
-        false,
-    );
-}
-
-fn check_json_server(path: &Path, executable: &Path, label: &str, claude: bool) {
-    match read_optional_json(path) {
-        Ok(Some(root)) => {
-            let entry = root
-                .get("mcpServers")
-                .and_then(Value::as_object)
-                .and_then(|servers| servers.get(SERVER_NAME));
-            if entry.is_none() {
-                println!("{label}: MISSING");
-                return;
-            }
-            let command = entry
-                .and_then(|value| value.get("command"))
-                .and_then(Value::as_str);
-            let expected = executable_string(executable).unwrap_or_default();
-            let type_ok = !claude
-                || entry
-                    .and_then(|value| value.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("stdio");
-            let ok = command == Some(expected.as_str())
-                && type_ok
-                && entry.is_some_and(is_sippion_json_entry);
-            println!("{label}: {}", if ok { "OK" } else { "MISMATCH" });
-        }
-        Ok(None) => println!("{label}: MISSING"),
-        Err(error) => println!("{label}: ERROR ({error})"),
-    }
-}
-
-fn check_rule(path: &Path, label: &str) {
-    let status = match read_optional_text(path) {
-        Ok(Some(contents)) => match managed_block_range(&contents, RULE_BEGIN, RULE_END) {
-            Ok(Some(_)) => "OK",
-            Ok(None) => "MISSING",
-            Err(_) => "ERROR",
-        },
-        Ok(None) => "MISSING",
-        Err(_) => "ERROR",
-    };
-    println!("{label} global rule: {status}");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_dir() -> PathBuf {
-        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!("sippion-setup-test-{id}"));
-        fs::create_dir_all(&path).expect("temp directory");
-        path
-    }
-
-    #[test]
-    fn codex_config_is_idempotent_and_escapes_unicode_spaces_and_backslashes() {
-        let path = temp_dir().join("config.toml");
-        let executable = Path::new(r"C:\Tools\日本語 project\sippion.exe");
-        let block = format!(
-            "{MANAGED_BEGIN}\n[mcp_servers.sippion]\ncommand = {}\n{MANAGED_END}\n",
-            toml_string(executable.to_str().expect("unicode path"))
-        );
-        let first = upsert_codex_block("[other]\nvalue = true\n", &block).expect("first upsert");
-        let second = upsert_codex_block(&first, &block).expect("second upsert");
-        assert_eq!(first, second);
-        assert!(first.contains(r#"C:\\Tools\\日本語 project\\sippion.exe"#));
-        fs::write(&path, first).expect("write");
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn malformed_or_duplicate_managed_markers_fail_closed() {
-        let malformed = format!("prefix\n{RULE_BEGIN}\nuser-owned-setting=true\n");
-        assert!(upsert_marked_block(&malformed, RULE_BEGIN, RULE_END, "replacement").is_err());
-        assert!(remove_block(&malformed, RULE_BEGIN, RULE_END).is_err());
-        let duplicate = format!(
-            "{RULE_BEGIN}\na\n{RULE_END}\nuser-owned-setting=true\n{RULE_BEGIN}\nb\n{RULE_END}\n"
-        );
-        assert!(upsert_marked_block(&duplicate, RULE_BEGIN, RULE_END, "replacement").is_err());
-        assert!(remove_block(&duplicate, RULE_BEGIN, RULE_END).is_err());
-    }
-
-    #[test]
-    fn json_server_preserves_other_servers_and_is_removable() {
-        let path = temp_dir().join("mcp_config.json");
-        fs::write(&path, r#"{"mcpServers":{"other":{"command":"other"}}}"#).expect("write");
-        let entry = json!({"command":"/tmp/sippion","args":["mcp","--root","."],"cwd":"."});
-        assert_eq!(
-            upsert_json_server(&path, entry).unwrap(),
-            FileChange::Updated
-        );
-        let value = read_optional_json(&path).unwrap().unwrap();
-        assert!(value["mcpServers"]["other"].is_object());
-        assert_eq!(remove_json_server(&path).unwrap(), FileChange::Updated);
-        assert!(read_optional_json(&path).unwrap().unwrap()["mcpServers"]["sippion"].is_null());
-    }
-
-    #[test]
-    fn marked_rule_handles_crlf_and_does_not_duplicate() {
-        let initial = "existing\r\n";
-        let block = format!("{RULE_BEGIN}\r\n# rule\r\n{RULE_END}\r\n");
-        let first = upsert_marked_block(initial, RULE_BEGIN, RULE_END, &block).expect("first");
-        let second = upsert_marked_block(&first, RULE_BEGIN, RULE_END, &block).expect("second");
-        assert_eq!(first, second);
-        assert_eq!(
-            remove_block(&first, RULE_BEGIN, RULE_END).expect("remove"),
-            initial
-        );
-    }
-
-    #[test]
-    fn backup_tracks_the_immediately_previous_configuration() {
-        let path = temp_dir().join("config.json");
-        fs::write(&path, "one\n").expect("initial");
-        write_bytes_with_backup(&path, b"two\n").expect("first update");
-        write_bytes_with_backup(&path, b"three\n").expect("second update");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "three\n");
-        assert_eq!(
-            fs::read_to_string(path.with_file_name("config.json.sippion-backup")).unwrap(),
-            "two\n"
-        );
     }
 }
