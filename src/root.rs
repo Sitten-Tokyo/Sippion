@@ -40,7 +40,7 @@ fn secure_explicit_root_with_home(
     }
     if !allow_broad_root && is_broad_root(&canonical, home) {
         return Err(
-            "refusing an over-broad project root (home directory or filesystem root); pass --allow-broad-root only for an intentional manual scan"
+            "refusing an over-broad project root (home directory, an ancestor of home, or filesystem root); pass --allow-broad-root only for an intentional manual scan"
                 .to_string(),
         );
     }
@@ -110,7 +110,7 @@ fn has_project_marker(path: &Path) -> bool {
 }
 
 fn is_broad_root(path: &Path, home: Option<&Path>) -> bool {
-    path.parent().is_none() || home.is_some_and(|home| path == home)
+    path.parent().is_none() || home.is_some_and(|home| home.starts_with(path))
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -198,5 +198,17 @@ mod tests {
             canonical_home
         );
         fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn explicit_parent_of_home_is_also_broad() {
+        let parent = temp_dir("parent-home");
+        let home = parent.join("user");
+        fs::create_dir(&home).unwrap();
+        let canonical_parent = fs::canonicalize(&parent).unwrap();
+        let canonical_home = fs::canonicalize(&home).unwrap();
+
+        assert!(is_broad_root(&canonical_parent, Some(&canonical_home)));
+        fs::remove_dir_all(parent).expect("cleanup");
     }
 }
