@@ -1,11 +1,9 @@
 $ErrorActionPreference = "Stop"
 
 # One-command bootstrap for Sippion. This bootstrap is intended to be invoked
-# from a commit-SHA-pinned raw GitHub URL. It resolves the newest published
-# Sippion release (including prereleases), pins all downloads to that tag,
-# verifies the published installer SHA-256, then delegates binary checksum and
-# GitHub artifact-attestation verification plus client registration to the
-# release installer.
+# from a commit-SHA-pinned raw GitHub URL. It resolves the newest non-draft
+# published release (including prereleases), verifies installer checksum and
+# provenance before execution, then delegates binary verification and setup.
 
 $repo = "Sitten-Tokyo/Sippion"
 $verifyOnlyValue = if ($env:SIPPION_BOOTSTRAP_VERIFY_ONLY) { $env:SIPPION_BOOTSTRAP_VERIFY_ONLY } else { "0" }
@@ -14,21 +12,13 @@ if ($verifyOnlyValue -notin @("0", "1")) {
 }
 $verifyOnly = $verifyOnlyValue -eq "1"
 
-$headers = @{
-    Accept = "application/vnd.github+json"
-    "X-GitHub-Api-Version" = "2026-03-10"
+$gh = Get-Command gh -ErrorAction SilentlyContinue
+if (-not $gh) {
+    throw "GitHub CLI is required for provenance verification."
 }
-$apiToken = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
-if ([string]::IsNullOrWhiteSpace($apiToken) -and (Get-Command gh -ErrorAction SilentlyContinue)) {
-    try {
-        $apiToken = (& gh auth token 2>$null).Trim()
-    }
-    catch {
-        $apiToken = $null
-    }
-}
-if (-not [string]::IsNullOrWhiteSpace($apiToken)) {
-    $headers.Authorization = "Bearer $apiToken"
+& gh attestation --help *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw "A GitHub CLI version with 'gh attestation' support is required."
 }
 
 $tempRoot = Join-Path $env:TEMP ("sippion-bootstrap-{0}" -f [Guid]::NewGuid().ToString("N"))
@@ -39,10 +29,13 @@ $originalAttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
-    $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=1"
-    $tag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
-    if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
-        throw "Could not resolve a valid published Sippion release tag."
+    $tag = (& gh release list --repo $repo --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName').Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+        throw "Could not resolve a valid non-draft published Sippion release tag."
+    }
+    $releaseSha = (& gh api "repos/$repo/commits/$tag" --jq '.sha').Trim()
+    if ($LASTEXITCODE -ne 0 -or $releaseSha -notmatch '^[0-9a-f]{40}$') {
+        throw "Could not resolve the published release tag to a commit SHA."
     }
 
     $releaseBase = "https://github.com/$repo/releases/download/$tag"
@@ -60,14 +53,19 @@ try {
         throw "Sippion installer checksum verification failed."
     }
 
+    & gh attestation verify $installer `
+        --repo $repo `
+        --signer-workflow "$repo/.github/workflows/release-draft.yml" `
+        --source-digest $releaseSha *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Sippion installer provenance verification failed."
+    }
+
     if ($verifyOnly) {
-        Write-Host "Verified Sippion bootstrap installer for $tag."
+        Write-Host "Verified Sippion bootstrap installer provenance for $tag."
         return
     }
 
-    # Keep provenance verification enabled for the default installation path.
-    # The release installer fails closed unless a GitHub CLI with
-    # `gh attestation` support can verify the selected binary.
     $env:SIPPION_REQUIRE_ATTESTATION = "1"
     $env:SIPPION_RELEASE_TAG = $tag
     $env:SIPPION_ATTESTATION_REPOSITORY = $repo
