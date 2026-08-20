@@ -11,31 +11,39 @@ Sippion は、AIコーディングエージェントがリポジトリ全体を�
 
 ## まずはインストール
 
-1コマンドでSippionをインストールできます。checksumを検証したうえで、
-`sippion setup` まで自動実行されます。GitHubへのログインは不要です。
+1コマンドでSippionをインストールできます。bootstrapは取得したinstallerの
+checksumを検証し、installerは選択したバイナリのchecksumに加えて
+**GitHub Artifact Attestation（その成果物が正規のGitHub Actionsから生成されたことの証明）**
+を検証してからインストールし、`sippion setup` まで自動実行します。
+
+デフォルト経路は、GitHub CLI (`gh`) がインストール済みで、`gh attestation` に対応し、
+GitHubへ認証できない場合はfail closed（安全性を確認できなければ処理を止める方式）で停止します。
+メインのインストール導線ではprovenance（成果物の出所保証）を無効化しません。
 
 ### macOS / Linux
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.ps1 | iex
 ```
 
 インストール後はこうなります。
 
 ```text
+installer checksumを検証
+    ↓
+バイナリchecksum + GitHub Artifact Attestationを検証
+    ↓
 Sippionをインストール
     ↓
 Codex + Claude Code + Antigravity に事前登録
     ↓
 各AIクライアントを再起動
-    ↓
-プロジェクトを開けばSippionが使える
 ```
 
 Sippionは、**3クライアントすべてに事前登録**します。今そのクライアントが
@@ -44,6 +52,10 @@ Sippionは、**3クライアントすべてに事前登録**します。今そ�
 各クライアントはSippionを `--root .` で起動するため、そのクライアントで開いた
 プロジェクトがSippionの読み取り専用ルートになります。リポジトリごとにSippionを
 登録し直す必要はありません。
+
+別の信頼できる方法でprovenanceを検証済みの管理環境向けには、checksumのみで進める
+明示的なopt-out（利用者が意図して検証を外す設定）もdirect installerに残しています。
+詳細は [Security and trust boundary](docs/security.md) を参照してください。
 
 ## Sippionは何をするの？
 
@@ -89,8 +101,8 @@ Sippionは、リポジトリ内のコードを実行しません。モデル通�
 対象ファイルの同一性を再確認します。高確度のsecretは出力前にredactします。
 また、リポジトリ内の文章は**命令ではなく信頼できないデータ**として扱います。
 
-完全なtrust boundary（信頼境界）や、Artifact Attestationまで検証するより厳格な
-インストール方法は [Security and trust boundary](docs/security.md) を参照してください。
+完全なtrust boundary（信頼境界）やインストール時の検証モデルは
+[Security and trust boundary](docs/security.md) を参照してください。
 
 ## 対応AIクライアント
 
@@ -110,8 +122,9 @@ sippion doctor
 sippion uninstall
 ```
 
-`setup` は何度実行しても同じ状態に収束します。`doctor` は登録状態を診断します。
-`uninstall` はSippionが管理しているクライアント設定とルールだけを削除し、
+`setup` は何度実行しても同じ状態に収束します。また、Sippion管理ブロックのBEGIN/ENDマーカーが
+欠落・重複・逆順になっている場合は、関係ないユーザー設定を巻き込まないよう**書き換えずエラー終了**します。
+`doctor` は登録状態を診断します。`uninstall` はSippionが管理しているクライアント設定とルールだけを削除し、
 関係のない設定は触りません。
 
 手動設定や診断の詳細は [Client setup](docs/clients.md) を参照してください。
