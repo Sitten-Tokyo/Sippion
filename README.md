@@ -11,37 +11,49 @@ relevant set of code excerpts.
 
 ## Quick start
 
-Install Sippion with one command. The installer verifies checksums and runs
-`sippion setup` automatically. No GitHub login is required.
+Install Sippion with one command. The bootstrap verifies its downloaded
+installer checksum, and the installer verifies the selected binary checksum
+**and GitHub artifact attestation** before installing it and running
+`sippion setup`.
+
+The default path fails closed unless the GitHub CLI (`gh`) is installed, has
+`gh attestation` support, and can authenticate to GitHub. This deliberately
+keeps release provenance verification enabled on the primary install path.
 
 ### macOS / Linux
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.ps1 | iex
 ```
 
 After installation:
 
 ```text
+verify installer checksum
+    ↓
+verify binary checksum + GitHub artifact attestation
+    ↓
 Sippion installed
     ↓
 Codex + Claude Code + Antigravity pre-registered
     ↓
 Restart those AI clients
-    ↓
-Open a project and use Sippion
 ```
 
 Sippion pre-registers **all three clients**, even if one is not installed yet.
 Each client launches Sippion with `--root .`, so the project opened by that
 client becomes Sippion's read-only project root. You do not need to register
 Sippion separately for every repository.
+
+A checksum-only direct installer mode remains available as an explicit opt-out
+for controlled environments where provenance was verified by another trusted
+mechanism. See [Security and trust boundary](docs/security.md).
 
 ## What Sippion does
 
@@ -88,8 +100,8 @@ Repository reads are bounded, reject symlinks and unsafe hard links, revalidate
 source identity around reads, and redact high-confidence secrets before output.
 Repository text is treated as **untrusted data**, not as instructions to the AI.
 
-For the full trust boundary and the stricter authenticated artifact-attestation
-install path, see [Security and trust boundary](docs/security.md).
+For the full trust boundary and installation trust model, see
+[Security and trust boundary](docs/security.md).
 
 ## Supported clients
 
@@ -110,9 +122,11 @@ sippion doctor
 sippion uninstall
 ```
 
-`setup` is idempotent. `doctor` checks registration health. `uninstall` removes
-Sippion-managed client configuration and rules but does not remove unrelated
-settings.
+`setup` is idempotent. It refuses to rewrite a Sippion-managed text block if its
+management markers are missing, duplicated, or out of order, rather than risking
+unrelated user settings. `doctor` checks registration health. `uninstall`
+removes Sippion-managed client configuration and rules but does not remove
+unrelated settings.
 
 See [Client setup](docs/clients.md) for manual configuration and diagnostics.
 
