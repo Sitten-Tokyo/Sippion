@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Unix bootstrap download chain
+      - name: Verify Unix bootstrap download chain and installer provenance
         if: runner.os != 'Windows'
         shell: sh
         env:
@@ -75,12 +75,11 @@ jobs:
         if: runner.os != 'Windows'
         shell: sh
         env:
-          GH_TOKEN: ${{ github.token }}
           SIPPION_REQUIRE_ATTESTATION: '0'
           SIPPION_INSTALL_VERIFY_ONLY: '1'
         run: sh scripts/install.sh
 
-      - name: Verify Unix direct installer attestation path
+      - name: Verify Unix direct installer strict attestation path
         if: runner.os != 'Windows'
         shell: sh
         env:
@@ -89,7 +88,24 @@ jobs:
           SIPPION_INSTALL_VERIFY_ONLY: '1'
         run: sh scripts/install.sh
 
-      - name: Verify Windows bootstrap download chain
+      - name: Exercise Unix direct installer commit path
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/sippion-direct-home"
+          export SIPPION_INSTALL_DIR="$RUNNER_TEMP/sippion-direct-bin"
+          mkdir -p "$HOME"
+          sh scripts/install.sh
+          test -x "$SIPPION_INSTALL_DIR/sippion"
+          "$SIPPION_INSTALL_DIR/sippion" doctor
+          test -s "$HOME/.codex/config.toml"
+          test -s "$HOME/.claude.json"
+          test -s "$HOME/.gemini/config/mcp_config.json"
+
+      - name: Verify Windows bootstrap download chain and installer provenance
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -126,12 +142,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           SIPPION_REQUIRE_ATTESTATION: '0'
           SIPPION_INSTALL_VERIFY_ONLY: '1'
         run: '& scripts/install.ps1'
 
-      - name: Verify Windows direct installer attestation path
+      - name: Verify Windows direct installer strict attestation path
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -139,3 +154,28 @@ jobs:
           SIPPION_REQUIRE_ATTESTATION: '1'
           SIPPION_INSTALL_VERIFY_ONLY: '1'
         run: '& scripts/install.ps1'
+
+      - name: Exercise Windows direct installer commit path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $fakeHome = Join-Path $env:RUNNER_TEMP "sippion-direct-home"
+          $bin = Join-Path $env:RUNNER_TEMP "sippion-direct-bin"
+          New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+          $env:USERPROFILE = $fakeHome
+          $env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
+          $env:SIPPION_INSTALL_DIR = $bin
+          & scripts/install.ps1
+          $installed = Join-Path $bin "sippion.exe"
+          if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Sippion binary was not installed by the direct installer." }
+          & $installed doctor
+          if ($LASTEXITCODE -ne 0) { throw "Installed Sippion doctor failed." }
+          foreach ($path in @(
+            (Join-Path $fakeHome ".codex\config.toml"),
+            (Join-Path $fakeHome ".claude.json"),
+            (Join-Path $fakeHome ".gemini\config\mcp_config.json")
+          )) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Expected setup file missing: $path" }
+          }
