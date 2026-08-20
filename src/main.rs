@@ -158,7 +158,7 @@ fn print_help() {
         "  --root-auto discovers a Git/project root from the current directory and refuses home/filesystem roots."
     );
     println!(
-        "  --allow-broad-root permits an explicit home/filesystem root and is intentionally never used by setup."
+        "  --allow-broad-root permits an explicit home, home-ancestor, or filesystem root and is intentionally never used by setup."
     );
     println!(
         "  --scan-budget-mib sets the adaptive scan ceiling; retrieval normally starts at 32 MiB."
