@@ -3,8 +3,9 @@ $ErrorActionPreference = "Stop"
 # One-command bootstrap for Sippion. This bootstrap is intended to be invoked
 # from a commit-SHA-pinned raw GitHub URL. It resolves the newest published
 # Sippion release (including prereleases), pins all downloads to that tag,
-# verifies the published installer SHA-256, then delegates binary checksum
-# verification and client registration to the release installer.
+# verifies the published installer SHA-256, then delegates binary checksum and
+# GitHub artifact-attestation verification plus client registration to the
+# release installer.
 
 $repo = "Sitten-Tokyo/Sippion"
 $verifyOnlyValue = if ($env:SIPPION_BOOTSTRAP_VERIFY_ONLY) { $env:SIPPION_BOOTSTRAP_VERIFY_ONLY } else { "0" }
@@ -18,7 +19,6 @@ $headers = @{
     "X-GitHub-Api-Version" = "2026-03-10"
 }
 $tempRoot = Join-Path $env:TEMP ("sippion-bootstrap-{0}" -f [Guid]::NewGuid().ToString("N"))
-$originalPath = $env:PATH
 $originalRequireAttestation = $env:SIPPION_REQUIRE_ATTESTATION
 $originalReleaseTag = $env:SIPPION_RELEASE_TAG
 $originalAttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
@@ -52,16 +52,10 @@ try {
         return
     }
 
-    # rc.32 and older installers attempt attestation whenever a usable `gh` is
-    # visible, even when the explicit opt-out is set. Hide any ambient `gh` with
-    # a temporary failing shim so the no-auth bootstrap remains deterministic.
-    $shimDir = Join-Path $tempRoot "bin"
-    New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
-    $shim = Join-Path $shimDir "gh.cmd"
-    "@exit /b 127`r`n" | Set-Content -LiteralPath $shim -Encoding ascii
-
-    $env:PATH = "$shimDir;$originalPath"
-    $env:SIPPION_REQUIRE_ATTESTATION = "0"
+    # Keep provenance verification enabled for the default installation path.
+    # The release installer fails closed unless a GitHub CLI with
+    # `gh attestation` support can verify the selected binary.
+    $env:SIPPION_REQUIRE_ATTESTATION = "1"
     $env:SIPPION_RELEASE_TAG = $tag
     $env:SIPPION_ATTESTATION_REPOSITORY = $repo
 
@@ -75,7 +69,6 @@ try {
     Write-Host "Restart those AI clients to reload their MCP settings."
 }
 finally {
-    $env:PATH = $originalPath
     if ($null -eq $originalRequireAttestation) { Remove-Item Env:SIPPION_REQUIRE_ATTESTATION -ErrorAction SilentlyContinue } else { $env:SIPPION_REQUIRE_ATTESTATION = $originalRequireAttestation }
     if ($null -eq $originalReleaseTag) { Remove-Item Env:SIPPION_RELEASE_TAG -ErrorAction SilentlyContinue } else { $env:SIPPION_RELEASE_TAG = $originalReleaseTag }
     if ($null -eq $originalAttestationRepository) { Remove-Item Env:SIPPION_ATTESTATION_REPOSITORY -ErrorAction SilentlyContinue } else { $env:SIPPION_ATTESTATION_REPOSITORY = $originalAttestationRepository }
