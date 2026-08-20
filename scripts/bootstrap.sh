@@ -4,8 +4,9 @@ set -eu
 # One-command bootstrap for Sippion. This bootstrap is intended to be invoked
 # from a commit-SHA-pinned raw GitHub URL. It resolves the newest published
 # Sippion release (including prereleases), pins all downloads to that tag,
-# verifies the published installer SHA-256, then delegates binary checksum
-# verification and client registration to the release installer.
+# verifies the published installer SHA-256, then delegates binary checksum and
+# GitHub artifact-attestation verification plus client registration to the
+# release installer.
 
 repo=Sitten-Tokyo/Sippion
 : "${SIPPION_BOOTSTRAP_VERIFY_ONLY:=0}"
@@ -32,16 +33,35 @@ sha256_file() {
   fi
 }
 
+github_api_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+if [ -z "$github_api_token" ] && command -v gh >/dev/null 2>&1; then
+  github_api_token=$(gh auth token 2>/dev/null || true)
+fi
+
+github_api_download() {
+  url=$1
+  output=$2
+  if [ -n "$github_api_token" ]; then
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      -H "Authorization: Bearer $github_api_token" \
+      "$url" --output "$output"
+  else
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "$url" --output "$output"
+  fi
+}
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 release_json="$tmp/releases.json"
-curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2026-03-10' \
+github_api_download \
   "https://api.github.com/repos/$repo/releases?per_page=1" \
-  --output "$release_json"
-
+  "$release_json"
 tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
 if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
   echo "Could not resolve a valid published Sippion release tag." >&2
@@ -73,15 +93,10 @@ if [ "$SIPPION_BOOTSTRAP_VERIFY_ONLY" = "1" ]; then
   exit 0
 fi
 
-# rc.32 and older installers attempt attestation whenever a usable `gh` is
-# visible, even when the explicit opt-out is set. Hide any ambient `gh` with a
-# temporary non-functional shim so the no-auth bootstrap remains deterministic.
-mkdir -p "$tmp/bin"
-printf '%s\n' '#!/bin/sh' 'exit 127' > "$tmp/bin/gh"
-chmod 700 "$tmp/bin/gh"
-
-PATH="$tmp/bin:$PATH" \
-SIPPION_REQUIRE_ATTESTATION=0 \
+# Keep provenance verification enabled for the default installation path. The
+# release installer fails closed unless a GitHub CLI with `gh attestation`
+# support can verify the selected binary against this repository.
+SIPPION_REQUIRE_ATTESTATION=1 \
 SIPPION_RELEASE_TAG="$tag" \
 SIPPION_ATTESTATION_REPOSITORY="$repo" \
 sh "$installer"

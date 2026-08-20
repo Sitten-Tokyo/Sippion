@@ -8,27 +8,32 @@ loaded at startup.
 
 ## Install
 
+The default path requires the GitHub CLI (`gh`) with `gh attestation` support
+and working GitHub authentication. Installation fails closed if the selected
+release binary cannot be verified against Sippion's GitHub artifact attestation.
+
 macOS / Linux:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/e69e13c9f34710e953722c11628b9f50df93bb7f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.ps1 | iex
 ```
 
 The bootstrap URL is pinned to a specific Git commit instead of `main`. It
-selects one published Sippion release, verifies the release installer checksum,
-and runs that installer. The release installer verifies the matching platform
-binary checksum, installs Sippion in the current user scope, and runs
-`sippion setup`.
+selects one published Sippion release and verifies the release installer
+checksum. The release installer then verifies the matching platform binary
+checksum **and GitHub artifact attestation**, installs Sippion in the current
+user scope, and runs `sippion setup`.
 
-The normal one-command path does not require GitHub login. See
-[Security and trust boundary](security.md) for the stricter authenticated
-artifact-attestation path and the exact trust model.
+A checksum-only direct-installer mode is retained only as an explicit opt-out
+for controlled environments where provenance was verified by another trusted
+mechanism. See [Security and trust boundary](security.md) for the exact trust
+model.
 
 For an existing binary:
 
@@ -38,9 +43,12 @@ sippion doctor
 sippion uninstall
 ```
 
-`setup` is idempotent. `doctor` reports missing or mismatched registrations,
-and `uninstall` removes only Sippion-managed entries and rules; it does not
-remove the binary or unrelated settings.
+`setup` is idempotent. Existing Sippion-managed text blocks are rewritten only
+when exactly one ordered BEGIN/END marker pair is present; malformed or
+duplicate markers cause a fail-closed error instead of risking unrelated
+settings. `doctor` reports missing, mismatched, or malformed registrations, and
+`uninstall` removes only Sippion-managed entries and rules; it does not remove
+the binary or unrelated settings.
 
 ## Run locally
 

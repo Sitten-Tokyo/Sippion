@@ -34,6 +34,22 @@ process to the intended project rather than a broad parent folder, and avoid
 combining untrusted repository analysis with automatic approval of write,
 network, credential, or shell-capable tools.
 
+## Client-configuration mutation safety
+
+`sippion setup` and `sippion uninstall` modify only their documented per-user
+client configuration and rule files. Text files managed with Sippion BEGIN/END
+markers are treated conservatively: exactly one ordered marker pair is required
+before an existing managed block can be replaced or removed. Missing halves,
+duplicate markers, or reversed markers cause the operation to fail closed
+without modifying that file.
+
+Before replacing an existing configuration file, Sippion refreshes a sibling
+`.sippion-backup` copy from the immediate pre-change contents. On Windows,
+where `rename` cannot replace an existing destination portably, Sippion first
+renames the original to a unique rollback path, installs the new file, and
+restores the original if installation fails. If even restoration fails, the
+error reports the rollback path that still contains the original bytes.
+
 ## Release and dependency supply chain
 
 CI and release workflows pin third-party GitHub Actions to full commit SHAs.
@@ -53,34 +69,31 @@ when the branch moves. The bootstrap then:
 2. pins subsequent downloads to that one release tag;
 3. downloads the release installer and its `.sha256` file and verifies the
    installer SHA-256 before execution;
-4. runs the release installer with the explicit no-attestation option; and
+4. runs the release installer with artifact-attestation verification explicitly
+   required; and
 5. the release installer downloads the platform binary and matching `.sha256`
-   file, verifies the binary SHA-256, installs it for the current user, and runs
+   file, verifies the binary SHA-256, verifies the GitHub artifact attestation
+   against `Sitten-Tokyo/Sippion`, installs it for the current user, and runs
    `sippion setup`.
 
-The default bootstrap does not require a GitHub account, GitHub CLI login, or an
-access token. It intentionally trades independent artifact-provenance
-verification for a much simpler installation path. Its trust chain is the
-commit-pinned bootstrap plus HTTPS to GitHub and SHA-256 values published with
-the selected GitHub Release.
+The default bootstrap therefore requires a GitHub CLI with `gh attestation`
+support and working GitHub authentication. If provenance verification cannot be
+performed or fails, installation stops. Checksums remain useful for corruption
+and mismatch detection, but they are not treated as an independent authenticity
+mechanism when both the artifact and checksum come from the same release.
 
-Checksums fetched from the same release as the artifact provide corruption and
-mismatch detection, but are not an independent authenticity mechanism if the
-release itself is compromised. This limitation is explicit rather than hidden.
+### Checksum-only explicit opt-out
 
-### Authenticated artifact-attestation installation
+Direct use of `scripts/install.sh` or `scripts/install.ps1` also requires
+artifact-attestation verification by default and fails closed unless a GitHub
+CLI with `gh attestation` support is available and authenticated.
 
-Release artifacts continue to carry GitHub artifact attestations. Direct use of
-`scripts/install.sh` or `scripts/install.ps1` requires artifact-attestation
-verification by default and fails closed unless a GitHub CLI with
-`gh attestation` support is available and authenticated. This path verifies the
-binary checksum and then binds the artifact to the GitHub Actions workflow
-identity through its attestation.
-
-`SIPPION_REQUIRE_ATTESTATION=0` is an explicit opt-out. Future installers treat
-that value deterministically: if it is `0`, attestation is skipped even when a
-`gh` executable happens to be installed. The one-command bootstrap uses this
-explicit mode after performing its own commit-pinned/bootstrap checksum checks.
+`SIPPION_REQUIRE_ATTESTATION=0` is an explicit opt-out for controlled
+environments where artifact provenance has already been verified through
+another trusted mechanism. In that mode the installer still verifies the
+published SHA-256 but emits a warning because release-local checksums alone do
+not provide independent authenticity if the release itself is compromised.
+The primary README bootstrap does not use this opt-out.
 
 `SIPPION_RELEASE_TAG` pins binary downloads to one release. An explicit
 `SIPPION_RELEASE_BASE_URL` / `ReleaseBaseUrl` remains available for controlled

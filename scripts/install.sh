@@ -3,9 +3,8 @@ set -eu
 
 # Installer for a published Sippion release. By default it resolves the newest
 # published release, including prereleases, through GitHub's public REST API.
-# Direct use requires GitHub artifact-attestation verification by default.
-# The one-command bootstrap deliberately sets SIPPION_REQUIRE_ATTESTATION=0
-# after verifying its commit-pinned bootstrap and release checksums.
+# Artifact-attestation verification is required by default, including when this
+# installer is invoked by the documented one-command bootstrap.
 : "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
 : "${SIPPION_REQUIRE_ATTESTATION:=1}"
 : "${SIPPION_RELEASE_TAG:=}"
@@ -36,17 +35,37 @@ if ! printf '%s\n' "$SIPPION_ATTESTATION_REPOSITORY" | grep -Eq '^[A-Za-z0-9_.-]
   exit 2
 fi
 
+github_api_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+if [ -z "$github_api_token" ] && command -v gh >/dev/null 2>&1; then
+  github_api_token=$(gh auth token 2>/dev/null || true)
+fi
+
+github_api_download() {
+  url=$1
+  output=$2
+  if [ -n "$github_api_token" ]; then
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      -H "Authorization: Bearer $github_api_token" \
+      "$url" --output "$output"
+  else
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "$url" --output "$output"
+  fi
+}
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-install.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 if [ -z "$SIPPION_RELEASE_BASE_URL" ]; then
   if [ -z "$SIPPION_RELEASE_TAG" ]; then
     release_json="$tmp/releases.json"
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2026-03-10' \
+    github_api_download \
       "https://api.github.com/repos/$SIPPION_ATTESTATION_REPOSITORY/releases?per_page=1" \
-      --output "$release_json"
+      "$release_json"
     SIPPION_RELEASE_TAG=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
   fi
 
