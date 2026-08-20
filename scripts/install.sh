@@ -3,9 +3,8 @@ set -eu
 
 # Installer for a published Sippion release. By default it resolves the newest
 # published release, including prereleases, through GitHub's public REST API.
-# Direct use requires GitHub artifact-attestation verification by default.
-# The one-command bootstrap deliberately sets SIPPION_REQUIRE_ATTESTATION=0
-# after verifying its commit-pinned bootstrap and release checksums.
+# Artifact-attestation verification is required by default, including when this
+# installer is invoked by the documented one-command bootstrap.
 : "${SIPPION_ATTESTATION_REPOSITORY:=Sitten-Tokyo/Sippion}"
 : "${SIPPION_REQUIRE_ATTESTATION:=1}"
 : "${SIPPION_RELEASE_TAG:=}"
