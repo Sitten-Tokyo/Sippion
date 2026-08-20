@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - refactor/repo-modules-13
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
