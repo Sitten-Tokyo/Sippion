@@ -9,26 +9,33 @@ loaded at startup.
 ## Install
 
 The default path requires the GitHub CLI (`gh`) with `gh attestation` support
-and working GitHub authentication. Installation fails closed if the selected
-release binary cannot be verified against Sippion's GitHub artifact attestation.
+and working GitHub authentication. Installation fails closed if either the
+release installer or selected release binary cannot be verified against the
+expected Sippion GitHub artifact attestation provenance.
 
 macOS / Linux:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.ps1 | iex
 ```
 
 The bootstrap URL is pinned to a specific Git commit instead of `main`. It
-selects one published Sippion release and verifies the release installer
-checksum. The release installer then verifies the matching platform binary
-checksum **and GitHub artifact attestation**, installs Sippion in the current
-user scope, and runs `sippion setup`.
+selects one non-draft published Sippion release, resolves its tag to an exact
+commit SHA, verifies the release installer checksum, and **verifies the
+installer GitHub artifact attestation before executing it**. The attestation is
+bound to the Sippion repository, the expected release-draft signer workflow,
+and the selected release commit SHA.
+
+The release installer then verifies the matching platform binary checksum and
+GitHub artifact attestation against the expected release-build signer workflow
+and the same source commit, installs Sippion in the current user scope, and runs
+transactional `sippion setup`.
 
 A checksum-only direct-installer mode is retained only as an explicit opt-out
 for controlled environments where provenance was verified by another trusted
@@ -43,10 +50,13 @@ sippion doctor
 sippion uninstall
 ```
 
-`setup` is idempotent. Existing Sippion-managed text blocks are rewritten only
-when exactly one ordered BEGIN/END marker pair is present; malformed or
-duplicate markers cause a fail-closed error instead of risking unrelated
-settings. `doctor` reports missing, mismatched, or malformed registrations, and
+`setup` is idempotent and transactional across its managed client files.
+Existing Sippion-managed text blocks are rewritten only when exactly one ordered
+BEGIN/END marker pair is present; malformed or duplicate markers cause a
+fail-closed error instead of risking unrelated settings. If any setup operation
+fails, files touched by that setup attempt are restored to their pre-attempt
+state. `doctor` reports missing, mismatched, malformed, or unreadable
+registrations and exits non-zero when any expected registration is unhealthy.
 `uninstall` removes only Sippion-managed entries and rules; it does not remove
 the binary or unrelated settings.
 
