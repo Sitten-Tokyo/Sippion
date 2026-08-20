@@ -354,8 +354,6 @@ fn request_id_key(id: &Value) -> Option<String> {
     if let Some(value) = number.as_u64() {
         return Some(format!("n:{value}"));
     }
-    // JSON-RPC permits numeric ids and only discourages fractional values. Keep fractional ids
-    // usable for response correlation/cancellation while preserving their numeric identity.
     number
         .as_f64()
         .filter(|value| value.is_finite())
@@ -396,9 +394,6 @@ fn handle_cancellation_notification(request: &Value, inflight: &InflightRequests
         .ok()
         .and_then(|active| active.get(&key).cloned());
     if let Some(request) = request {
-        // Cancellation and response commitment race on one atomic state transition. Whichever
-        // wins first is final: cancellation that wins suppresses the response; a cancellation
-        // arriving after processing has committed its response is safely ignored.
         request.try_cancel();
     }
     true
@@ -432,11 +427,6 @@ fn finish_async_response<W: Write>(
     completed: bool,
     response: &[u8],
 ) -> io::Result<()> {
-    // First verify that this worker still owns the registration. Then atomically arbitrate
-    // completion against cancellation without holding the in-flight lock during stdout I/O.
-    // This removes the check-then-write cancellation race: only one transition out of PENDING
-    // can win. The registration remains present until I/O finishes, so blocked stdout still counts
-    // toward MAX_INFLIGHT_TOOL_CALLS and request ids cannot be reused prematurely.
     let still_registered = {
         let active = match inflight.lock() {
             Ok(active) => active,
@@ -448,9 +438,6 @@ fn finish_async_response<W: Write>(
     };
 
     let write_result = if still_registered && completed {
-        // Wait for the shared stdout writer before committing the response. While queued here, a
-        // cancellation can still win the terminal-state CAS and suppress output. Once this worker
-        // owns stdout, committing immediately before write is the narrowest practical boundary.
         match writer.lock() {
             Ok(mut out) => {
                 if request.try_commit_response() {
@@ -542,9 +529,6 @@ fn handle_request<W: Write>(
         );
     };
     let id = object.get("id").cloned();
-
-    // Notifications never receive a response. The only legacy notification we need is the completed
-    // initialize signal; unknown notifications can be ignored under JSON-RPC semantics.
     let Some(id) = id else {
         return Ok(());
     };
@@ -561,9 +545,7 @@ fn handle_request<W: Write>(
     let result = match method {
         "server/discover" => match validate_bound_protocol(params, true, legacy_initialized) {
             Ok(ProtocolMode::Modern) => Ok(discover_result()),
-            Ok(ProtocolMode::Legacy) => {
-                Err(RpcError::new(-32602, "modern MCP metadata required"))
-            }
+            Ok(ProtocolMode::Legacy) => Err(RpcError::new(-32602, "modern MCP metadata required")),
             Err(error) => Err(error),
         },
         "initialize" => legacy_initialize(params, legacy_initialized),
@@ -634,8 +616,6 @@ fn validate_bound_protocol(
 ) -> Result<ProtocolMode, RpcError> {
     let requested = validate_protocol(params, modern_required)?;
     match requested {
-        // Modern MCP is stateless: protocol version and capabilities come from this request's
-        // _meta and must never be inferred from, or blocked by, earlier requests on this process.
         ProtocolMode::Modern => Ok(ProtocolMode::Modern),
         ProtocolMode::Legacy if legacy_initialized.load(AtomicOrdering::Acquire) => {
             Ok(ProtocolMode::Legacy)
@@ -672,8 +652,6 @@ fn validate_legacy_initialize(params: &Value) -> Result<(), RpcError> {
 }
 
 fn bind_legacy_initialize(legacy_initialized: &AtomicBool) {
-    // Legacy compatibility keeps only the handshake state legacy requests actually require. It
-    // never binds or downgrades modern requests, which are self-contained by protocol design.
     legacy_initialized.store(true, AtomicOrdering::Release);
 }
 
