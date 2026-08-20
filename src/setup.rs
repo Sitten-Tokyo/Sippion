@@ -235,7 +235,10 @@ fn restore_snapshots(snapshots: &[FileSnapshot]) -> Vec<String> {
             None => match fs::remove_file(&snapshot.path) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(format!("cannot remove {}: {error}", snapshot.path.display())),
+                Err(error) => Err(format!(
+                    "cannot remove {}: {error}",
+                    snapshot.path.display()
+                )),
             },
         };
         if let Err(error) = result {
