@@ -23,13 +23,13 @@ keeps release provenance verification enabled on the primary install path.
 ### macOS / Linux
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/b36be13408fd1874dbf9c6868d15d3dc56478def/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.ps1 | iex
 ```
 
 After installation:
