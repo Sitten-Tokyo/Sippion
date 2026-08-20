@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -44,18 +44,23 @@ fn empty_gitignore_does_not_turn_complete_no_match_into_policy_excluded_status()
         let stdin = child.stdin.as_mut().expect("child stdin");
         serde_json::to_writer(&mut *stdin, &request).expect("serialize request");
         stdin.write_all(b"\n").expect("write newline");
+        stdin.flush().expect("flush request");
     }
-    drop(child.stdin.take());
 
-    let output = child.wait_with_output().expect("wait for sippion");
-    assert!(
-        output.status.success(),
-        "sippion failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("UTF-8 MCP response");
+    let stdout = child.stdout.take().expect("child stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut response_line = String::new();
+    reader
+        .read_line(&mut response_line)
+        .expect("read async MCP response");
+    assert!(!response_line.is_empty(), "MCP response must not be empty");
+
+    drop(child.stdin.take());
+    let status = child.wait().expect("wait for sippion");
+    assert!(status.success(), "sippion process failed");
+
     let response: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("valid JSON-RPC response");
+        serde_json::from_str(response_line.trim()).expect("valid JSON-RPC response");
     let text = response["result"]["content"][0]["text"]
         .as_str()
         .expect("model-visible text");
