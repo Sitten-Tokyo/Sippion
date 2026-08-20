@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn normalized_query(q: &str) -> NormalizedQuery {
