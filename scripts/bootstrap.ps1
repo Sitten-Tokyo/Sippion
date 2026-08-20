@@ -18,6 +18,19 @@ $headers = @{
     Accept = "application/vnd.github+json"
     "X-GitHub-Api-Version" = "2026-03-10"
 }
+$apiToken = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
+if ([string]::IsNullOrWhiteSpace($apiToken) -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+    try {
+        $apiToken = (& gh auth token 2>$null).Trim()
+    }
+    catch {
+        $apiToken = $null
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($apiToken)) {
+    $headers.Authorization = "Bearer $apiToken"
+}
+
 $tempRoot = Join-Path $env:TEMP ("sippion-bootstrap-{0}" -f [Guid]::NewGuid().ToString("N"))
 $originalRequireAttestation = $env:SIPPION_REQUIRE_ATTESTATION
 $originalReleaseTag = $env:SIPPION_RELEASE_TAG
