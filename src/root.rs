@@ -24,19 +24,25 @@ pub(crate) fn secure_explicit_root(
     root: impl AsRef<Path>,
     allow_broad_root: bool,
 ) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(root.as_ref())
+    let home = home_dir().and_then(|path| fs::canonicalize(path).ok());
+    secure_explicit_root_with_home(root.as_ref(), allow_broad_root, home.as_deref())
+}
+
+fn secure_explicit_root_with_home(
+    root: &Path,
+    allow_broad_root: bool,
+    home: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let canonical = fs::canonicalize(root)
         .map_err(|error| format!("cannot resolve project root: {error}"))?;
     if !canonical.is_dir() {
         return Err("project root must be a directory".to_string());
     }
-    if !allow_broad_root {
-        let home = home_dir().and_then(|path| fs::canonicalize(path).ok());
-        if is_broad_root(&canonical, home.as_deref()) {
-            return Err(
-                "refusing an over-broad project root (home directory or filesystem root); pass --allow-broad-root only for an intentional manual scan"
-                    .to_string(),
-            );
-        }
+    if !allow_broad_root && is_broad_root(&canonical, home) {
+        return Err(
+            "refusing an over-broad project root (home directory or filesystem root); pass --allow-broad-root only for an intentional manual scan"
+                .to_string(),
+        );
     }
     Ok(canonical)
 }
@@ -68,7 +74,7 @@ fn infer_project_root(start: &Path, home: Option<&Path>) -> Result<PathBuf, Stri
         let Some(parent) = current.parent() else {
             break;
         };
-        if parent == current {
+        if parent == current.as_path() {
             break;
         }
         current = parent.to_path_buf();
@@ -183,8 +189,14 @@ mod tests {
     fn explicit_home_requires_broad_root_opt_in() {
         let home = temp_dir("explicit-home");
         let canonical_home = fs::canonicalize(&home).unwrap();
-        assert!(is_broad_root(&canonical_home, Some(&canonical_home)));
-        assert!(!is_broad_root(&canonical_home.join("project"), Some(&canonical_home)));
+
+        let error = secure_explicit_root_with_home(&home, false, Some(&canonical_home))
+            .expect_err("home rejected");
+        assert!(error.contains("over-broad"));
+        assert_eq!(
+            secure_explicit_root_with_home(&home, true, Some(&canonical_home)).unwrap(),
+            canonical_home
+        );
         fs::remove_dir_all(home).expect("cleanup");
     }
 }
