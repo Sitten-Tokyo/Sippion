@@ -11,10 +11,11 @@ Sippion は、AIコーディングエージェントがリポジトリ全体を�
 
 ## まずはインストール
 
-1コマンドでSippionをインストールできます。bootstrapは取得したinstallerの
-checksumを検証し、installerは選択したバイナリのchecksumに加えて
-**GitHub Artifact Attestation（その成果物が正規のGitHub Actionsから生成されたことの証明）**
-を検証してからインストールし、`sippion setup` まで自動実行します。
+1コマンドでSippionをインストールできます。bootstrapは取得したinstallerについて、
+checksumに加えて **GitHub Artifact Attestation（その成果物が正規のGitHub Actionsから生成されたことの証明）**
+を**実行前に検証**します。その後installerが、選択したバイナリのchecksumと
+Artifact Attestationを検証してからインストールし、transactional（途中失敗時に元へ戻す方式）の
+`sippion setup` まで自動実行します。
 
 デフォルト経路は、GitHub CLI (`gh`) がインストール済みで、`gh attestation` に対応し、
 GitHubへ認証できない場合はfail closed（安全性を確認できなければ処理を止める方式）で停止します。
@@ -23,19 +24,19 @@ GitHubへ認証できない場合はfail closed（安全性を確認できなけ
 ### macOS / Linux
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/4cd67d7930d7f7fab45794e93ed4281a8dab0c0c/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.ps1 | iex
 ```
 
 インストール後はこうなります。
 
 ```text
-installer checksumを検証
+installer checksum + GitHub Artifact Attestationを検証
     ↓
 バイナリchecksum + GitHub Artifact Attestationを検証
     ↓
@@ -45,6 +46,9 @@ Codex + Claude Code + Antigravity に事前登録
     ↓
 各AIクライアントを再起動
 ```
+
+2段階のAttestation検証はいずれも、Sippionリポジトリだけでなく、期待するRelease workflowと、
+選択したRelease tagから解決した正確なcommit SHAまで固定して確認します。
 
 Sippionは、**3クライアントすべてに事前登録**します。今そのクライアントが
 インストールされていなくても設定は作られます。
@@ -122,10 +126,12 @@ sippion doctor
 sippion uninstall
 ```
 
-`setup` は何度実行しても同じ状態に収束します。また、Sippion管理ブロックのBEGIN/ENDマーカーが
-欠落・重複・逆順になっている場合は、関係ないユーザー設定を巻き込まないよう**書き換えずエラー終了**します。
-`doctor` は登録状態を診断します。`uninstall` はSippionが管理しているクライアント設定とルールだけを削除し、
-関係のない設定は触りません。
+`setup` は何度実行しても同じ状態に収束し、管理対象ファイル全体についてtransactionalに動作します。
+また、Sippion管理ブロックのBEGIN/ENDマーカーが欠落・重複・逆順になっている場合は、
+関係ないユーザー設定を巻き込まないよう**書き換えずエラー終了**します。いずれかのクライアント設定に
+失敗した場合、そのsetup試行で触れたファイルは開始前の状態へ戻します。
+`doctor` は登録状態を診断し、MISSING / MISMATCH / ERRORが1件でもあれば非0終了します。
+`uninstall` はSippionが管理しているクライアント設定とルールだけを削除し、関係のない設定は触りません。
 
 手動設定や診断の詳細は [Client setup](docs/clients.md) を参照してください。
 
@@ -182,13 +188,15 @@ sippion-macos-x86_64
 ```
 
 Release workflowは4ターゲットをbuildし、portableなSHA-256ファイルと
-GitHub Artifact Attestationを生成します。サードパーティGitHub Actionsはfull commit SHAに固定し、
-Release supply-chain smoke workflowで、Releaseを公開せずにbuild、Attestation、
-artifact upload/download、installer Attestationまで検証します。
+GitHub Artifact Attestationを生成します。サードパーティGitHub Actionsはfull commit SHAに固定します。
+Pull RequestのRelease supply-chain smokeでは配布用Attestationを新規発行せずにbuild/assemblyを検証し、
+別ジョブで公開済みinstallerとbinaryを、実際のinstallerと同じrepository + signer workflow + source SHA条件で
+consumer側から検証します。
 
 version bumpが `main` に入った後、prereleaseを自動公開する場合は、current `main` と
 完全に同じcommitを指す `release/vX.Y.Z[-prerelease]` の一時branchを作ります。
 workflowがversionとtagを検証してprereleaseを公開し、成功後にそのbranchを削除します。
+手動draft releaseは、入力したtagと同じtag refからworkflowを起動しなければ拒否されます。
 
 ## ドキュメント
 
