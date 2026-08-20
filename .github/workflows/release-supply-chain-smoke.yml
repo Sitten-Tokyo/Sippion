@@ -3,6 +3,10 @@ name: Release supply-chain smoke
 on:
   pull_request:
     paths:
+      - scripts/bootstrap.sh
+      - scripts/bootstrap.ps1
+      - scripts/install.sh
+      - scripts/install.ps1
       - .github/workflows/release-build.yml
       - .github/workflows/release-draft.yml
       - .github/workflows/release-supply-chain-smoke.yml
@@ -17,23 +21,22 @@ concurrency:
 
 jobs:
   build:
-    name: Exercise reusable release build
+    name: Exercise reusable release build without attestations
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      attest: false
     permissions:
       contents: read
       id-token: write
       attestations: write
 
-  assemble-and-attest:
-    name: Exercise release download and installer attestation
+  assemble:
+    name: Exercise release payload assembly
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +65,7 @@ jobs:
             test -s "downloaded/$artifact/SHA256SUMS"
           done
 
-      - name: Stage installer assets
+      - name: Stage installer assets and checksums
         shell: bash
         run: |
           set -euo pipefail
@@ -70,10 +73,55 @@ jobs:
           cp scripts/install.sh installer-smoke/install.sh
           cp scripts/install.ps1 installer-smoke/install.ps1
           sha256sum installer-smoke/install.sh installer-smoke/install.ps1 > installer-smoke/SHA256SUMS
+          test -s installer-smoke/install.sh
+          test -s installer-smoke/install.ps1
+          test -s installer-smoke/SHA256SUMS
 
-      - name: Attest installer provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            installer-smoke/install.sh
-            installer-smoke/install.ps1
+  verify-published-policy:
+    name: Verify published artifacts with strict provenance policy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Resolve latest non-draft published release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          test -n "$tag"
+          sha=$(gh api "repos/$REPOSITORY/commits/$tag" --jq '.sha')
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download representative published assets
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir published
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir published \
+            --pattern install.sh \
+            --pattern sippion-linux-x86_64
+
+      - name: Verify installer and binary provenance policy
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh attestation verify published/install.sh \
+            --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+            --source-digest "$RELEASE_SHA" >/dev/null
+          gh attestation verify published/sippion-linux-x86_64 \
+            --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release-build.yml" \
+            --source-digest "$RELEASE_SHA" >/dev/null

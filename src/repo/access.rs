@@ -146,16 +146,21 @@ impl RepositoryAccess {
         // can never be reported as an absolute NO_MATCH when policy hid repository content. A
         // pruned directory counts as one exclusion sentinel even though its subtree size is unknown.
         //
-        // The ignore walker can also hide entries before the discovery loop sees them. Treat every
-        // visible directory containing a .gitignore/.ignore control file as one conservative policy
-        // exclusion sentinel. This deliberately does not inspect the ignored subtree: privacy and
-        // performance semantics stay unchanged, while repository-wide absence claims stay sound.
-        let has_ignore_control = |directory: &Path| {
-            [".gitignore", ".ignore"]
-                .into_iter()
-                .any(|name| std::fs::symlink_metadata(directory.join(name)).is_ok())
+        // The ignore walker can also hide entries before the discovery loop sees them. A non-empty
+        // .gitignore/.ignore is therefore one conservative exclusion sentinel. Empty control files
+        // cannot hide anything and must not degrade an otherwise complete NO_MATCH result. We use
+        // symlink metadata only and never follow the control path outside the trusted root.
+        let has_effective_ignore_control = |directory: &Path| {
+            [".gitignore", ".ignore"].into_iter().any(|name| {
+                std::fs::symlink_metadata(directory.join(name))
+                    .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
+            })
         };
-        let root_ignore_sentinel = if has_ignore_control(&root_path) { 1 } else { 0 };
+        let root_ignore_sentinel = if has_effective_ignore_control(&root_path) {
+            1
+        } else {
+            0
+        };
         let prefiltered_policy_exclusions = Arc::new(AtomicUsize::new(root_ignore_sentinel));
         let filter_exclusions = Arc::clone(&prefiltered_policy_exclusions);
         builder.filter_entry(move |entry| {
@@ -163,7 +168,7 @@ impl RepositoryAccess {
                 return true;
             }
             if entry.file_type().is_some_and(|kind| kind.is_dir())
-                && has_ignore_control(entry.path())
+                && has_effective_ignore_control(entry.path())
             {
                 filter_exclusions.fetch_add(1, AtomicOrdering::Relaxed);
             }

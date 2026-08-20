@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, for example v0.1.0-rc.31
+        description: Existing release tag; dispatch this workflow using that same tag ref
         required: true
         type: string
   push:
@@ -104,6 +104,16 @@ jobs:
             fi
           else
             resolved_sha=$(resolve_tag "$release_tag")
+            if [ "$CURRENT_SHA" != "$resolved_sha" ]; then
+              echo "Manual release must be dispatched on the exact tag ref $release_tag ($resolved_sha), got workflow source $CURRENT_SHA." >&2
+              exit 2
+            fi
+            expected_version=${release_tag#v}
+            manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+            if [ "$manifest_version" != "$expected_version" ]; then
+              echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+              exit 2
+            fi
           fi
 
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
@@ -115,6 +125,7 @@ jobs:
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ needs.prepare-release.outputs.sha }}
+      attest: true
     permissions:
       contents: read
       id-token: write

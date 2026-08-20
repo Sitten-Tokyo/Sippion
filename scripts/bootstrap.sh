@@ -2,11 +2,10 @@
 set -eu
 
 # One-command bootstrap for Sippion. This bootstrap is intended to be invoked
-# from a commit-SHA-pinned raw GitHub URL. It resolves the newest published
-# Sippion release (including prereleases), pins all downloads to that tag,
-# verifies the published installer SHA-256, then delegates binary checksum and
-# GitHub artifact-attestation verification plus client registration to the
-# release installer.
+# from a commit-SHA-pinned raw GitHub URL. It resolves the newest non-draft
+# published release (including prereleases), pins all downloads to that tag,
+# verifies the installer checksum and GitHub provenance before execution, then
+# delegates binary verification, installation, and client registration.
 
 repo=Sitten-Tokyo/Sippion
 : "${SIPPION_BOOTSTRAP_VERIFY_ONLY:=0}"
@@ -19,8 +18,12 @@ esac
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 2; }
 command -v mktemp >/dev/null 2>&1 || { echo "mktemp is required" >&2; exit 2; }
 command -v awk >/dev/null 2>&1 || { echo "awk is required" >&2; exit 2; }
-command -v sed >/dev/null 2>&1 || { echo "sed is required" >&2; exit 2; }
 command -v grep >/dev/null 2>&1 || { echo "grep is required" >&2; exit 2; }
+command -v gh >/dev/null 2>&1 || { echo "GitHub CLI is required for provenance verification." >&2; exit 2; }
+gh attestation --help >/dev/null 2>&1 || {
+  echo "A GitHub CLI version with 'gh attestation' support is required." >&2
+  exit 2
+}
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -33,38 +36,17 @@ sha256_file() {
   fi
 }
 
-github_api_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
-if [ -z "$github_api_token" ] && command -v gh >/dev/null 2>&1; then
-  github_api_token=$(gh auth token 2>/dev/null || true)
-fi
-
-github_api_download() {
-  url=$1
-  output=$2
-  if [ -n "$github_api_token" ]; then
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2026-03-10' \
-      -H "Authorization: Bearer $github_api_token" \
-      "$url" --output "$output"
-  else
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2026-03-10' \
-      "$url" --output "$output"
-  fi
-}
-
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-release_json="$tmp/releases.json"
-github_api_download \
-  "https://api.github.com/repos/$repo/releases?per_page=1" \
-  "$release_json"
-tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
+tag=$(gh release list --repo "$repo" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
 if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
-  echo "Could not resolve a valid published Sippion release tag." >&2
+  echo "Could not resolve a valid non-draft published Sippion release tag." >&2
+  exit 2
+fi
+release_sha=$(gh api "repos/$repo/commits/$tag" --jq '.sha')
+if ! printf '%s\n' "$release_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Could not resolve the published release tag to a commit SHA." >&2
   exit 2
 fi
 
@@ -88,14 +70,19 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+if ! gh attestation verify "$installer" \
+  --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release-draft.yml" \
+  --source-digest "$release_sha" >/dev/null; then
+  echo "Sippion installer provenance verification failed." >&2
+  exit 1
+fi
+
 if [ "$SIPPION_BOOTSTRAP_VERIFY_ONLY" = "1" ]; then
-  echo "Verified Sippion bootstrap installer for $tag."
+  echo "Verified Sippion bootstrap installer provenance for $tag."
   exit 0
 fi
 
-# Keep provenance verification enabled for the default installation path. The
-# release installer fails closed unless a GitHub CLI with `gh attestation`
-# support can verify the selected binary against this repository.
 SIPPION_REQUIRE_ATTESTATION=1 \
 SIPPION_RELEASE_TAG="$tag" \
 SIPPION_ATTESTATION_REPOSITORY="$repo" \
