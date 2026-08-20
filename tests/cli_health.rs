@@ -25,7 +25,10 @@ fn doctor_returns_nonzero_when_expected_configuration_is_missing() {
     command.env("HOME", &home);
 
     let output = command.output().expect("run doctor");
-    assert!(!output.status.success(), "doctor must fail for an empty home");
+    assert!(
+        !output.status.success(),
+        "doctor must fail for an empty home"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("MISSING"));
