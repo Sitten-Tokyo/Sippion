@@ -1,0 +1,1042 @@
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, BufRead, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::core::{
+    CoordinationContext, InputError, McpToolInput, capability_registry, mcp_tool_definitions,
+};
+use crate::service::RepositoryService;
+
+const MODERN_MCP_VERSION: &str = "2026-07-28";
+const LEGACY_MCP_VERSION: &str = "2025-11-25";
+const MAX_MCP_REQUEST_BYTES: usize = 256 * 1024;
+const STATIC_CACHE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+const MAX_INFLIGHT_TOOL_CALLS: usize = 4;
+const MAX_GLOBAL_TOOL_CALLS_PER_WINDOW: usize = 24;
+const MAX_ACTOR_TOOL_CALLS_PER_WINDOW: usize = 8;
+const TOOL_RATE_WINDOW: Duration = Duration::from_secs(60);
+const SERVER_INSTRUCTIONS: &str = "For repository-wide code discovery, use Sippion before broad recursive search or reading many files. Cooperating subagents should share session_id and use distinct agent_id values so Sippion can reuse structural analysis and diversify overlapping results. Use native file reads only after narrowing candidates. Sippion exposes one local/read-only tool, repo_context; skip it when the exact path/string is already known.";
+
+const INFLIGHT_PENDING: u8 = 0;
+const INFLIGHT_CANCELLED: u8 = 1;
+const INFLIGHT_RESPONSE_COMMITTED: u8 = 2;
+
+#[derive(Debug)]
+struct InflightRequest {
+    cancellation: AtomicBool,
+    terminal_state: AtomicU8,
+}
+
+impl InflightRequest {
+    fn new() -> Self {
+        Self {
+            cancellation: AtomicBool::new(false),
+            terminal_state: AtomicU8::new(INFLIGHT_PENDING),
+        }
+    }
+
+    fn cancellation(&self) -> &AtomicBool {
+        &self.cancellation
+    }
+
+    fn try_cancel(&self) -> bool {
+        if self
+            .terminal_state
+            .compare_exchange(
+                INFLIGHT_PENDING,
+                INFLIGHT_CANCELLED,
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
+            )
+            .is_ok()
+        {
+            self.cancellation.store(true, AtomicOrdering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn try_commit_response(&self) -> bool {
+        self.terminal_state
+            .compare_exchange(
+                INFLIGHT_PENDING,
+                INFLIGHT_RESPONSE_COMMITTED,
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+type InflightRequests = Arc<Mutex<HashMap<String, Arc<InflightRequest>>>>;
+
+#[derive(Debug)]
+struct InflightGuard {
+    inflight: InflightRequests,
+    request_key: String,
+    request: Arc<InflightRequest>,
+}
+
+impl InflightGuard {
+    fn new(inflight: InflightRequests, request_key: String, request: Arc<InflightRequest>) -> Self {
+        Self {
+            inflight,
+            request_key,
+            request,
+        }
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        remove_inflight_registration(&self.inflight, &self.request_key, &self.request);
+    }
+}
+
+#[derive(Debug, Default)]
+struct RateState {
+    global: VecDeque<Instant>,
+    actors: HashMap<String, VecDeque<Instant>>,
+}
+
+#[derive(Debug, Default)]
+struct ToolRateLimiter {
+    state: Mutex<RateState>,
+}
+
+impl ToolRateLimiter {
+    fn try_acquire(&self, actor_key: &str) -> bool {
+        self.try_acquire_at(actor_key, Instant::now())
+    }
+
+    fn try_acquire_at(&self, actor_key: &str, now: Instant) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        while state
+            .global
+            .front()
+            .is_some_and(|started| now.saturating_duration_since(*started) >= TOOL_RATE_WINDOW)
+        {
+            state.global.pop_front();
+        }
+        state.actors.retain(|_, actor| {
+            while actor
+                .front()
+                .is_some_and(|started| now.saturating_duration_since(*started) >= TOOL_RATE_WINDOW)
+            {
+                actor.pop_front();
+            }
+            !actor.is_empty()
+        });
+        let actor_len = state.actors.get(actor_key).map_or(0, VecDeque::len);
+        if state.global.len() >= MAX_GLOBAL_TOOL_CALLS_PER_WINDOW
+            || actor_len >= MAX_ACTOR_TOOL_CALLS_PER_WINDOW
+        {
+            return false;
+        }
+        state.global.push_back(now);
+        state
+            .actors
+            .entry(actor_key.to_string())
+            .or_default()
+            .push_back(now);
+        true
+    }
+}
+
+fn rate_actor_key(context: &CoordinationContext) -> String {
+    match (context.session_id.as_deref(), context.agent_id.as_deref()) {
+        (Some(session), Some(agent)) => format!("{session}/{agent}"),
+        (Some(session), None) => format!("{session}/__parent__"),
+        (None, Some(agent)) => format!("__default__/{agent}"),
+        (None, None) => "__legacy__".to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolMode {
+    Legacy,
+    Modern,
+}
+
+#[derive(Debug)]
+struct RpcError {
+    code: i64,
+    message: &'static str,
+    data: Option<Value>,
+}
+
+impl RpcError {
+    const fn new(code: i64, message: &'static str) -> Self {
+        Self {
+            code,
+            message,
+            data: None,
+        }
+    }
+
+    fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(data);
+        self
+    }
+}
+
+enum Frame {
+    Eof,
+    Data(Vec<u8>),
+    TooLarge,
+}
+
+pub(crate) fn serve_stdio(service: Arc<dyn RepositoryService>) -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    let writer = Arc::new(Mutex::new(io::stdout()));
+    let inflight: InflightRequests = Arc::new(Mutex::new(HashMap::new()));
+    let rate_limiter = Arc::new(ToolRateLimiter::default());
+    let legacy_initialized = Arc::new(AtomicBool::new(false));
+
+    loop {
+        match read_frame(&mut reader)? {
+            Frame::Eof => return Ok(()),
+            Frame::TooLarge => with_shared_writer(&writer, |out| {
+                write_rpc_error(
+                    out,
+                    Value::Null,
+                    &RpcError::new(-32600, "request exceeds local size limit"),
+                )
+            })?,
+            Frame::Data(frame) => {
+                if frame.iter().all(|byte| byte.is_ascii_whitespace()) {
+                    continue;
+                }
+                let request = match serde_json::from_slice::<Value>(&frame) {
+                    Ok(request) => request,
+                    Err(_) => {
+                        with_shared_writer(&writer, |out| {
+                            write_rpc_error(out, Value::Null, &RpcError::new(-32700, "parse error"))
+                        })?;
+                        continue;
+                    }
+                };
+
+                if handle_cancellation_notification(&request, &inflight) {
+                    continue;
+                }
+
+                if let Some((request_id, request_key)) = async_tool_call_id(&request) {
+                    let null_params = Value::Null;
+                    let params = request.get("params").unwrap_or(&null_params);
+                    if let Err(error) = validate_bound_protocol(params, false, &legacy_initialized)
+                    {
+                        with_shared_writer(&writer, |out| {
+                            write_rpc_error(out, request_id.clone(), &error)
+                        })?;
+                        continue;
+                    }
+                    let inflight_request = Arc::new(InflightRequest::new());
+                    let registration_error = {
+                        let mut active = inflight
+                            .lock()
+                            .map_err(|_| io::Error::other("in-flight state poisoned"))?;
+                        if active.contains_key(&request_key) {
+                            Some(RpcError::new(-32600, "duplicate in-flight request id"))
+                        } else if active.len() >= MAX_INFLIGHT_TOOL_CALLS {
+                            Some(RpcError::new(-32603, "too many in-flight tool calls"))
+                        } else {
+                            active.insert(request_key.clone(), Arc::clone(&inflight_request));
+                            None
+                        }
+                    };
+                    if let Some(error) = registration_error {
+                        with_shared_writer(&writer, |out| {
+                            write_rpc_error(out, request_id.clone(), &error)
+                        })?;
+                        continue;
+                    }
+
+                    let worker_service = Arc::clone(&service);
+                    let worker_writer = Arc::clone(&writer);
+                    let worker_inflight = Arc::clone(&inflight);
+                    let worker_rate_limiter = Arc::clone(&rate_limiter);
+                    let worker_legacy_initialized = Arc::clone(&legacy_initialized);
+                    let worker_request_key = request_key.clone();
+                    let worker_inflight_request = Arc::clone(&inflight_request);
+                    let worker_request_id = request_id.clone();
+                    let spawn_result = std::thread::Builder::new()
+                        .name("sippion-tool-call".to_string())
+                        .spawn(move || {
+                            let _inflight_guard = InflightGuard::new(
+                                Arc::clone(&worker_inflight),
+                                worker_request_key.clone(),
+                                Arc::clone(&worker_inflight_request),
+                            );
+                            let mut response = Vec::new();
+                            let completed = match catch_unwind(AssertUnwindSafe(|| {
+                                handle_request(
+                                    worker_service.as_ref(),
+                                    &request,
+                                    Some(worker_inflight_request.cancellation()),
+                                    &worker_rate_limiter,
+                                    &worker_legacy_initialized,
+                                    &mut response,
+                                )
+                            })) {
+                                Ok(Ok(())) => true,
+                                Ok(Err(error)) => {
+                                    eprintln!("Sippion: tool worker response assembly failed: {error}");
+                                    false
+                                }
+                                Err(_) => {
+                                    response.clear();
+                                    let _ = write_rpc_error(
+                                        &mut response,
+                                        worker_request_id,
+                                        &RpcError::new(-32603, "internal tool worker failure"),
+                                    );
+                                    true
+                                }
+                            };
+
+                            if let Err(error) = finish_async_response(
+                                &worker_writer,
+                                &worker_inflight,
+                                &worker_request_key,
+                                &worker_inflight_request,
+                                completed,
+                                &response,
+                            ) {
+                                // A partial/failed stdout write can corrupt the newline-delimited
+                                // JSON-RPC stream. Continuing could make every later response
+                                // undecodable, so fail the process instead of silently proceeding.
+                                eprintln!("Sippion: fatal stdout MCP failure: {error}");
+                                std::process::exit(2);
+                            }
+                        });
+                    if spawn_result.is_err() {
+                        remove_inflight_registration(&inflight, &request_key, &inflight_request);
+                        with_shared_writer(&writer, |out| {
+                            write_rpc_error(
+                                out,
+                                request_id,
+                                &RpcError::new(-32603, "cannot start tool worker"),
+                            )
+                        })?;
+                    }
+                    continue;
+                }
+
+                with_shared_writer(&writer, |out| {
+                    handle_request(
+                        service.as_ref(),
+                        &request,
+                        None,
+                        &rate_limiter,
+                        &legacy_initialized,
+                        out,
+                    )
+                })?;
+            }
+        }
+    }
+}
+
+fn with_shared_writer<F>(writer: &Arc<Mutex<io::Stdout>>, operation: F) -> io::Result<()>
+where
+    F: FnOnce(&mut io::Stdout) -> io::Result<()>,
+{
+    let mut out = writer
+        .lock()
+        .map_err(|_| io::Error::other("stdout state poisoned"))?;
+    operation(&mut out)
+}
+
+fn request_id_key(id: &Value) -> Option<String> {
+    if let Some(value) = id.as_str() {
+        return Some(format!("s:{value}"));
+    }
+    let number = id.as_number()?;
+    if let Some(value) = number.as_i64() {
+        return Some(format!("n:{value}"));
+    }
+    if let Some(value) = number.as_u64() {
+        return Some(format!("n:{value}"));
+    }
+    number
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .map(|value| format!("f:{:016x}", value.to_bits()))
+}
+
+fn async_tool_call_id(request: &Value) -> Option<(Value, String)> {
+    let object = request.as_object()?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || object.get("method").and_then(Value::as_str) != Some("tools/call")
+    {
+        return None;
+    }
+    let id = object.get("id")?;
+    let key = request_id_key(id)?;
+    Some((id.clone(), key))
+}
+
+fn handle_cancellation_notification(request: &Value, inflight: &InflightRequests) -> bool {
+    let Some(object) = request.as_object() else {
+        return false;
+    };
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || object.get("method").and_then(Value::as_str) != Some("notifications/cancelled")
+        || object.contains_key("id")
+    {
+        return false;
+    }
+
+    let request_id = object
+        .get("params")
+        .and_then(|params| params.get("requestId"));
+    let Some(key) = request_id.and_then(request_id_key) else {
+        return true;
+    };
+    let request = inflight
+        .lock()
+        .ok()
+        .and_then(|active| active.get(&key).cloned());
+    if let Some(request) = request {
+        request.try_cancel();
+    }
+    true
+}
+
+fn remove_inflight_registration(
+    inflight: &InflightRequests,
+    request_key: &str,
+    request: &Arc<InflightRequest>,
+) -> bool {
+    let mut active = match inflight.lock() {
+        Ok(active) => active,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if active
+        .get(request_key)
+        .is_some_and(|registered| Arc::ptr_eq(registered, request))
+    {
+        active.remove(request_key);
+        true
+    } else {
+        false
+    }
+}
+
+fn finish_async_response<W: Write>(
+    writer: &Arc<Mutex<W>>,
+    inflight: &InflightRequests,
+    request_key: &str,
+    request: &Arc<InflightRequest>,
+    completed: bool,
+    response: &[u8],
+) -> io::Result<()> {
+    let still_registered = {
+        let active = match inflight.lock() {
+            Ok(active) => active,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active
+            .get(request_key)
+            .is_some_and(|registered| Arc::ptr_eq(registered, request))
+    };
+
+    let write_result = if still_registered && completed {
+        match writer.lock() {
+            Ok(mut out) => {
+                if request.try_commit_response() {
+                    out.write_all(response).and_then(|_| out.flush())
+                } else {
+                    Ok(())
+                }
+            }
+            Err(_) => Err(io::Error::other("stdout state poisoned")),
+        }
+    } else {
+        Ok(())
+    };
+    remove_inflight_registration(inflight, request_key, request);
+    write_result
+}
+
+fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Frame> {
+    let mut collected = Vec::new();
+    let mut too_large = false;
+
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if collected.is_empty() && !too_large {
+                return Ok(Frame::Eof);
+            }
+            if too_large {
+                return Ok(Frame::TooLarge);
+            }
+            if collected.last() == Some(&b'\r') {
+                collected.pop();
+            }
+            return Ok(Frame::Data(collected));
+        }
+
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let payload_len = newline.unwrap_or(available.len());
+        if !too_large {
+            if collected.len().saturating_add(payload_len) > MAX_MCP_REQUEST_BYTES {
+                too_large = true;
+            } else {
+                collected.extend_from_slice(&available[..payload_len]);
+            }
+        }
+
+        let consume_len = newline.map_or(available.len(), |position| position + 1);
+        reader.consume(consume_len);
+        if newline.is_some() {
+            if too_large {
+                return Ok(Frame::TooLarge);
+            }
+            if collected.last() == Some(&b'\r') {
+                collected.pop();
+            }
+            return Ok(Frame::Data(collected));
+        }
+    }
+}
+
+fn handle_request<W: Write>(
+    service: &dyn RepositoryService,
+    request: &Value,
+    cancellation: Option<&AtomicBool>,
+    rate_limiter: &ToolRateLimiter,
+    legacy_initialized: &AtomicBool,
+    writer: &mut W,
+) -> io::Result<()> {
+    let Some(object) = request.as_object() else {
+        return write_rpc_error(
+            writer,
+            Value::Null,
+            &RpcError::new(-32600, "invalid request"),
+        );
+    };
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return write_rpc_error(
+            writer,
+            object.get("id").cloned().unwrap_or(Value::Null),
+            &RpcError::new(-32600, "invalid JSON-RPC version"),
+        );
+    }
+
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return write_rpc_error(
+            writer,
+            object.get("id").cloned().unwrap_or(Value::Null),
+            &RpcError::new(-32600, "missing method"),
+        );
+    };
+    let id = object.get("id").cloned();
+    let Some(id) = id else {
+        return Ok(());
+    };
+    if request_id_key(&id).is_none() {
+        return write_rpc_error(
+            writer,
+            Value::Null,
+            &RpcError::new(-32600, "invalid request id"),
+        );
+    }
+
+    let null_params = Value::Null;
+    let params = object.get("params").unwrap_or(&null_params);
+    let result = match method {
+        "server/discover" => match validate_bound_protocol(params, true, legacy_initialized) {
+            Ok(ProtocolMode::Modern) => Ok(discover_result()),
+            Ok(ProtocolMode::Legacy) => {
+                Err(RpcError::new(-32602, "modern MCP metadata required"))
+            }
+            Err(error) => Err(error),
+        },
+        "initialize" => legacy_initialize(params, legacy_initialized),
+        "ping" => match validate_bound_protocol(params, false, legacy_initialized) {
+            Ok(ProtocolMode::Legacy) => Ok(json!({})),
+            Ok(ProtocolMode::Modern) => Err(RpcError::new(-32601, "method not found")),
+            Err(error) => Err(error),
+        },
+        "tools/list" => validate_bound_protocol(params, false, legacy_initialized)
+            .and_then(|mode| list_tools(params, mode)),
+        "tools/call" => validate_bound_protocol(params, false, legacy_initialized)
+            .and_then(|mode| call_tool(service, params, cancellation, rate_limiter, mode)),
+        _ => Err(RpcError::new(-32601, "method not found")),
+    };
+
+    match result {
+        Ok(result) => write_rpc_result(writer, id, result),
+        Err(error) => write_rpc_error(writer, id, &error),
+    }
+}
+
+fn validate_protocol(params: &Value, modern_required: bool) -> Result<ProtocolMode, RpcError> {
+    let meta = params.get("_meta");
+    let protocol = meta
+        .and_then(|value| value.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(Value::as_str);
+
+    let Some(protocol) = protocol else {
+        if modern_required {
+            return Err(RpcError::new(-32602, "missing MCP request metadata"));
+        }
+        return Ok(ProtocolMode::Legacy);
+    };
+    if protocol != MODERN_MCP_VERSION {
+        return Err(
+            RpcError::new(-32022, "unsupported MCP protocol version").with_data(json!({
+                "supported": [MODERN_MCP_VERSION, LEGACY_MCP_VERSION],
+                "requested": protocol
+            })),
+        );
+    }
+
+    let has_capabilities = meta
+        .and_then(|value| value.get("io.modelcontextprotocol/clientCapabilities"))
+        .is_some_and(Value::is_object);
+    if !has_capabilities {
+        return Err(RpcError::new(-32602, "missing MCP client capabilities"));
+    }
+    if let Some(client_info) =
+        meta.and_then(|value| value.get("io.modelcontextprotocol/clientInfo"))
+    {
+        let Some(client_info) = client_info.as_object() else {
+            return Err(RpcError::new(-32602, "invalid MCP client info"));
+        };
+        if !client_info.get("name").is_some_and(Value::is_string)
+            || !client_info.get("version").is_some_and(Value::is_string)
+        {
+            return Err(RpcError::new(-32602, "invalid MCP client info"));
+        }
+    }
+    Ok(ProtocolMode::Modern)
+}
+
+fn validate_bound_protocol(
+    params: &Value,
+    modern_required: bool,
+    legacy_initialized: &AtomicBool,
+) -> Result<ProtocolMode, RpcError> {
+    let requested = validate_protocol(params, modern_required)?;
+    match requested {
+        ProtocolMode::Modern => Ok(ProtocolMode::Modern),
+        ProtocolMode::Legacy if legacy_initialized.load(AtomicOrdering::Acquire) => {
+            Ok(ProtocolMode::Legacy)
+        }
+        ProtocolMode::Legacy => Err(RpcError::new(-32002, "legacy MCP initialize required")),
+    }
+}
+
+fn validate_legacy_initialize(params: &Value) -> Result<(), RpcError> {
+    let Some(object) = params.as_object() else {
+        return Err(RpcError::new(-32602, "initialize params must be an object"));
+    };
+    let Some(protocol) = object.get("protocolVersion").and_then(Value::as_str) else {
+        return Err(RpcError::new(-32602, "missing legacy MCP protocolVersion"));
+    };
+    if protocol.is_empty() {
+        return Err(RpcError::new(-32602, "invalid legacy MCP protocolVersion"));
+    }
+    if !object.get("capabilities").is_some_and(Value::is_object) {
+        return Err(RpcError::new(
+            -32602,
+            "missing legacy MCP client capabilities",
+        ));
+    }
+    let Some(client_info) = object.get("clientInfo").and_then(Value::as_object) else {
+        return Err(RpcError::new(-32602, "missing legacy MCP client info"));
+    };
+    if !client_info.get("name").is_some_and(Value::is_string)
+        || !client_info.get("version").is_some_and(Value::is_string)
+    {
+        return Err(RpcError::new(-32602, "invalid legacy MCP client info"));
+    }
+    Ok(())
+}
+
+fn bind_legacy_initialize(legacy_initialized: &AtomicBool) {
+    legacy_initialized.store(true, AtomicOrdering::Release);
+}
+
+fn legacy_initialize(params: &Value, legacy_initialized: &AtomicBool) -> Result<Value, RpcError> {
+    validate_legacy_initialize(params)?;
+    bind_legacy_initialize(legacy_initialized);
+    Ok(legacy_initialize_result())
+}
+
+fn modern_server_meta() -> Value {
+    json!({
+        "io.modelcontextprotocol/serverInfo": {
+            "name": "sippion",
+            "version": crate::core::VERSION
+        }
+    })
+}
+
+fn discover_result() -> Value {
+    json!({
+        "resultType": "complete",
+        "supportedVersions": [MODERN_MCP_VERSION, LEGACY_MCP_VERSION],
+        "capabilities": {"tools": {}},
+        "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+                "name": "sippion",
+                "version": crate::core::VERSION
+            },
+            "io.sippion/capabilityRegistry": capability_registry()
+        },
+        "instructions": SERVER_INSTRUCTIONS,
+        "ttlMs": STATIC_CACHE_TTL_MS,
+        "cacheScope": "public"
+    })
+}
+
+fn legacy_initialize_result() -> Value {
+    json!({
+        "protocolVersion": LEGACY_MCP_VERSION,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": "sippion", "version": crate::core::VERSION},
+        "instructions": SERVER_INSTRUCTIONS
+    })
+}
+
+fn list_tools(params: &Value, mode: ProtocolMode) -> Result<Value, RpcError> {
+    if params.get("cursor").is_some() {
+        return Err(RpcError::new(-32602, "pagination cursor not supported"));
+    }
+    let tools = mcp_tool_definitions();
+    Ok(match mode {
+        ProtocolMode::Legacy => json!({"tools": tools}),
+        ProtocolMode::Modern => json!({
+            "resultType": "complete",
+            "tools": tools,
+            "_meta": modern_server_meta(),
+            "ttlMs": STATIC_CACHE_TTL_MS,
+            "cacheScope": "public"
+        }),
+    })
+}
+
+fn call_tool(
+    service: &dyn RepositoryService,
+    params: &Value,
+    cancellation: Option<&AtomicBool>,
+    rate_limiter: &ToolRateLimiter,
+    mode: ProtocolMode,
+) -> Result<Value, RpcError> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RpcError::new(-32602, "missing tool name"))?;
+    if name != "repo_context" {
+        return Err(RpcError::new(-32602, "unknown tool"));
+    }
+
+    let arguments = match params.get("arguments") {
+        Some(value) if !value.is_object() => {
+            return Err(RpcError::new(-32602, "tool arguments must be an object"));
+        }
+        Some(value) => value.clone(),
+        None => json!({}),
+    };
+    let input = match serde_json::from_value::<McpToolInput>(arguments) {
+        Ok(input) => input,
+        Err(_) => {
+            return Ok(tool_result(
+                mode,
+                true,
+                "invalid tool arguments; expected {\"q\":\"1-8 technical search terms\",\"session_id\":\"optional\",\"agent_id\":\"optional\"}",
+            ));
+        }
+    };
+    let query = match input.normalize() {
+        Ok(query) => query,
+        Err(error) => return Ok(tool_result(mode, true, input_error_message(error))),
+    };
+    let coordination = match input.coordination() {
+        Ok(coordination) => coordination,
+        Err(error) => return Ok(tool_result(mode, true, input_error_message(error))),
+    };
+    let actor_key = rate_actor_key(&coordination);
+    if !rate_limiter.try_acquire(&actor_key) {
+        return Ok(tool_result(
+            mode,
+            true,
+            "Sippion tool rate limit reached (8 calls/60s per agent, 24 calls/60s process-wide); narrow the query or reduce parallel fan-out",
+        ));
+    }
+
+    let text = service.context(&query, Some(&coordination), cancellation);
+    match text {
+        Ok(text) => Ok(tool_result(mode, false, &text)),
+        Err(error) => Ok(tool_result(mode, true, error.user_message())),
+    }
+}
+
+fn tool_result(mode: ProtocolMode, is_error: bool, text: &str) -> Value {
+    match mode {
+        ProtocolMode::Legacy => json!({
+            "content": [{"type": "text", "text": text}],
+            "isError": is_error
+        }),
+        ProtocolMode::Modern => json!({
+            "resultType": "complete",
+            "content": [{"type": "text", "text": text}],
+            "isError": is_error,
+            "_meta": modern_server_meta()
+        }),
+    }
+}
+
+const fn input_error_message(error: InputError) -> &'static str {
+    match error {
+        InputError::EmptyQuery => "q must not be empty",
+        InputError::QueryTooLong => "q exceeds 512 UTF-8 bytes",
+        InputError::TooFewTerms => {
+            "q must contain 1-8 distinct technical terms; provide at least one likely identifier/term"
+        }
+        InputError::TooManyTerms => {
+            "q must contain 1-8 distinct technical terms; remove prose or narrow the query"
+        }
+        InputError::InvalidSessionId => {
+            "session_id must be 1-96 bytes and use only ASCII letters, digits, '.', '_', ':', '-' with an alphanumeric first character"
+        }
+        InputError::InvalidAgentId => {
+            "agent_id must be 1-96 bytes and use only ASCII letters, digits, '.', '_', ':', '-' with an alphanumeric first character"
+        }
+    }
+}
+
+fn write_rpc_result<W: Write>(writer: &mut W, id: Value, result: Value) -> io::Result<()> {
+    write_json_line(
+        writer,
+        &json!({"jsonrpc": "2.0", "id": id, "result": result}),
+    )
+}
+
+fn write_rpc_error<W: Write>(writer: &mut W, id: Value, error: &RpcError) -> io::Result<()> {
+    let mut payload = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {"code": error.code, "message": error.message}
+    });
+    if let Some(data) = &error.data {
+        payload["error"]["data"] = data.clone();
+    }
+    write_json_line(writer, &payload)
+}
+
+fn write_json_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
+    serde_json::to_writer(&mut *writer, value).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    struct PanicService;
+
+    impl RepositoryService for PanicService {
+        fn context(
+            &self,
+            _query: &crate::core::NormalizedQuery,
+            _coordination: Option<&CoordinationContext>,
+            _cancellation: Option<&AtomicBool>,
+        ) -> Result<String, crate::service::RepositoryServiceError> {
+            panic!("repository service must not be called")
+        }
+    }
+
+    struct StaticService;
+
+    impl RepositoryService for StaticService {
+        fn context(
+            &self,
+            query: &crate::core::NormalizedQuery,
+            coordination: Option<&CoordinationContext>,
+            _cancellation: Option<&AtomicBool>,
+        ) -> Result<String, crate::service::RepositoryServiceError> {
+            let agent = coordination
+                .and_then(|context| context.agent_id.as_deref())
+                .unwrap_or("none");
+            Ok(format!("service:{}:{agent}", query.terms.join(",")))
+        }
+    }
+
+    #[test]
+    fn oversized_stdio_frame_is_drained_without_retaining_it() {
+        let mut bytes = vec![b'x'; MAX_MCP_REQUEST_BYTES + 1];
+        bytes.extend_from_slice(b"\n{}\n");
+        let mut cursor = Cursor::new(bytes);
+        assert!(matches!(read_frame(&mut cursor).unwrap(), Frame::TooLarge));
+        assert!(matches!(read_frame(&mut cursor).unwrap(), Frame::Data(data) if data == b"{}"));
+    }
+
+    #[test]
+    fn modern_and_legacy_protocol_paths_remain_bounded() {
+        let initialized = AtomicBool::new(false);
+        let modern = json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MODERN_MCP_VERSION,
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        });
+        assert_eq!(
+            validate_bound_protocol(&modern, false, &initialized).expect("modern"),
+            ProtocolMode::Modern
+        );
+        assert!(validate_bound_protocol(&json!({}), false, &initialized).is_err());
+
+        let legacy = json!({
+            "protocolVersion": LEGACY_MCP_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"}
+        });
+        legacy_initialize(&legacy, &initialized).expect("legacy initialize");
+        assert_eq!(
+            validate_bound_protocol(&json!({}), false, &initialized).expect("legacy"),
+            ProtocolMode::Legacy
+        );
+    }
+
+    #[test]
+    fn discovery_requires_modern_metadata_without_panicking() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {}
+        });
+        let mut output = Vec::new();
+        handle_request(
+            &PanicService,
+            &request,
+            None,
+            &ToolRateLimiter::default(),
+            &AtomicBool::new(false),
+            &mut output,
+        )
+        .expect("response");
+        let response: Value = serde_json::from_slice(&output).expect("json");
+        assert_eq!(response["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn valid_tool_call_uses_repository_service_boundary() {
+        let params = json!({
+            "name": "repo_context",
+            "arguments": {
+                "q": "Authentication Middleware",
+                "session_id": "task-1",
+                "agent_id": "tests"
+            }
+        });
+        let result = call_tool(
+            &StaticService,
+            &params,
+            None,
+            &ToolRateLimiter::default(),
+            ProtocolMode::Legacy,
+        )
+        .expect("tool result");
+        assert_eq!(result["isError"], false);
+        assert_eq!(
+            result["content"][0]["text"].as_str(),
+            Some("service:authentication,middleware:tests")
+        );
+    }
+
+    #[test]
+    fn invalid_tool_input_is_rejected_before_repository_scan() {
+        let params = json!({"name":"repo_context","arguments":{"unexpected":true}});
+        let result = call_tool(
+            &PanicService,
+            &params,
+            None,
+            &ToolRateLimiter::default(),
+            ProtocolMode::Legacy,
+        )
+        .expect("tool result");
+        assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn sequential_tool_calls_are_rate_limited_per_actor_and_globally() {
+        let limiter = ToolRateLimiter::default();
+        let now = Instant::now();
+        for _ in 0..MAX_ACTOR_TOOL_CALLS_PER_WINDOW {
+            assert!(limiter.try_acquire_at("session/a", now));
+        }
+        assert!(!limiter.try_acquire_at("session/a", now));
+        assert!(limiter.try_acquire_at("session/b", now));
+        assert!(limiter.try_acquire_at("session/a", now + TOOL_RATE_WINDOW));
+
+        let global = ToolRateLimiter::default();
+        for index in 0..MAX_GLOBAL_TOOL_CALLS_PER_WINDOW {
+            assert!(global.try_acquire_at(&format!("actor-{index}"), now));
+        }
+        assert!(!global.try_acquire_at("overflow", now));
+    }
+
+    #[test]
+    fn cancellation_notification_marks_matching_inflight_request() {
+        let request = Arc::new(InflightRequest::new());
+        let inflight = Arc::new(Mutex::new(HashMap::from([(
+            "s:req-1".to_string(),
+            Arc::clone(&request),
+        )])));
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "req-1"}
+        });
+        assert!(handle_cancellation_notification(&notification, &inflight));
+        assert!(request.cancellation().load(AtomicOrdering::Acquire));
+    }
+
+    #[test]
+    fn cancelled_async_response_is_never_written() {
+        let request = Arc::new(InflightRequest::new());
+        assert!(request.try_cancel());
+        let inflight = Arc::new(Mutex::new(HashMap::from([(
+            "s:req-2".to_string(),
+            Arc::clone(&request),
+        )])));
+        let writer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        finish_async_response(
+            &writer,
+            &inflight,
+            "s:req-2",
+            &request,
+            true,
+            b"should-not-be-written",
+        )
+        .expect("completion");
+        assert!(writer.lock().expect("writer").is_empty());
+    }
+
+    #[test]
+    fn request_ids_preserve_json_rpc_type_and_fractional_identity() {
+        assert_eq!(request_id_key(&json!(7)).as_deref(), Some("n:7"));
+        assert_eq!(request_id_key(&json!("7")).as_deref(), Some("s:7"));
+        assert_ne!(request_id_key(&json!(7)), request_id_key(&json!("7")));
+        assert!(request_id_key(&json!(1.5)).is_some());
+        assert!(request_id_key(&json!(-0.25)).is_some());
+    }
+}
