@@ -52,9 +52,10 @@ release signer workflow, and the exact commit SHA resolved from the selected
 release tag.
 
 Sippion pre-registers **all three clients**, even if one is not installed yet.
-Each client launches Sippion with `--root .`, so the project opened by that
-client becomes Sippion's read-only project root. You do not need to register
-Sippion separately for every repository.
+Each client launches Sippion with `--root-auto`. Sippion resolves an enclosing
+Git repository first, then a nearby project manifest, and refuses automatic
+selection of the user's home directory or filesystem root. You do not need to
+register Sippion separately for every repository.
 
 A checksum-only direct installer mode remains available as an explicit opt-out
 for controlled environments where provenance was verified by another trusted
@@ -130,20 +131,34 @@ sippion uninstall
 `setup` is idempotent and transactional across the managed client files. It
 refuses to rewrite a Sippion-managed text block if its management markers are
 missing, duplicated, or out of order, rather than risking unrelated user
-settings. If any client update fails, files touched by that setup attempt are
-restored. `doctor` checks registration health and exits non-zero when any
-expected registration is unhealthy. `uninstall` removes Sippion-managed client
+settings. Managed configuration-file symlinks are refused. On Unix, MCP client
+configuration files are created or repaired as owner-only `0600`; rollback also
+restores the previous permission bits. Persistent `.sippion-backup` copies are
+not created, and legacy copies from older releases are removed transactionally.
+If any client update fails, files touched by that setup attempt are restored.
+`doctor` checks registration health and exits non-zero when any expected
+registration is unhealthy. `uninstall` removes Sippion-managed client
 configuration and rules but does not remove unrelated settings.
 
 See [Client setup](docs/clients.md) for manual configuration and diagnostics.
 
 ## Run Sippion manually
 
+To infer a safe project root from the current directory:
+
+```sh
+sippion mcp --root-auto
+```
+
 To bind Sippion explicitly to one project root:
 
 ```sh
 sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT
 ```
+
+Home-directory, filesystem-root, and home-ancestor scans are rejected by
+default. An intentional broad manual scan requires the explicit
+`--allow-broad-root` opt-in. Setup never enables that override.
 
 To lower the adaptive scan ceiling:
 
