@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::{Value, json};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use serde_json::{Value, json};
 
 const SERVER_NAME: &str = "sippion";
 const MANAGED_BEGIN: &str = "# BEGIN SIPPION MANAGED CONFIG";
@@ -239,6 +239,7 @@ fn capture_setup_snapshots(home: &Path) -> Result<Vec<FileSnapshot>, String> {
 }
 
 fn snapshot_path(path: PathBuf) -> Result<FileSnapshot, String> {
+    reject_symlink_file(&path)?;
     match fs::read(&path) {
         Ok(contents) => {
             let permissions = fs::metadata(&path)
@@ -347,7 +348,7 @@ fn remove_codex(path: &Path) -> Result<FileChange, String> {
     let command_is_sippion = section
         .lines()
         .find_map(|line| line.strip_prefix("command = "))
-        .is_some_and(|value| value.contains("sippion"));
+        .is_some_and(toml_command_is_sippion);
     if !command_is_sippion || !section.contains("args = [\"mcp\"") {
         return Ok(FileChange::Unchanged);
     }
@@ -593,6 +594,18 @@ fn is_current_sippion_json_entry(value: &Value) -> bool {
     current_args && object.get("cwd").and_then(Value::as_str) == Some(".")
 }
 
+fn toml_command_is_sippion(value: &str) -> bool {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value);
+    value
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name == "sippion" || name == "sippion.exe")
+}
+
 fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
     reject_symlink_file(path)?;
     match fs::read_to_string(path) {
@@ -690,11 +703,8 @@ fn write_replacement_bytes(
     };
 
     let temporary = write_secure_temporary(path, contents)?;
-    let desired_permissions = desired_permissions(
-        security,
-        existing_permissions.as_ref(),
-        forced_permissions,
-    );
+    let desired_permissions =
+        desired_permissions(security, existing_permissions.as_ref(), forced_permissions);
     if let Some(permissions) = desired_permissions.as_ref() {
         if let Err(error) = fs::set_permissions(&temporary, permissions.clone()) {
             let _ = fs::remove_file(&temporary);
@@ -724,8 +734,9 @@ fn write_replacement_bytes(
 
     if forced_permissions.is_some() {
         if let Some(permissions) = desired_permissions {
-            fs::set_permissions(path, permissions)
-                .map_err(|error| format!("cannot restore permissions on {}: {error}", path.display()))?;
+            fs::set_permissions(path, permissions).map_err(|error| {
+                format!("cannot restore permissions on {}: {error}", path.display())
+            })?;
         }
     }
     Ok(())
@@ -801,8 +812,9 @@ fn replace_existing_windows_preserving_acl(path: &Path, temporary: &Path) -> Res
 
     match write_in_place(&replacement) {
         Ok(()) => {
-            fs::remove_file(temporary)
-                .map_err(|error| format!("cannot remove staged {}: {error}", temporary.display()))?;
+            fs::remove_file(temporary).map_err(|error| {
+                format!("cannot remove staged {}: {error}", temporary.display())
+            })?;
             Ok(())
         }
         Err(install_error) => match write_in_place(&original) {
@@ -913,16 +925,18 @@ fn check_codex(home: &Path, executable: &Path) -> CheckStatus {
                 println!("Codex MCP config: ERROR (malformed Sippion managed markers)");
                 return CheckStatus::Error;
             }
-            if !contents.contains("[mcp_servers.sippion]") {
+            let Some(start) = find_codex_table_start(&contents) else {
                 println!("Codex MCP config: MISSING");
                 return CheckStatus::Missing;
-            }
+            };
+            let end = find_next_toml_table(&contents, start).unwrap_or(contents.len());
+            let section = &contents[start..end];
             let command = executable_string(executable).unwrap_or_default();
-            let ok = contents.contains("[mcp_servers.sippion]")
-                && contents.contains(&toml_string(&command))
-                && contents.contains(ROOT_AUTO_TOML_ARGS)
-                && contents.contains("cwd = \".\"")
-                && contents.contains("enabled_tools = [\"repo_context\"]");
+            let expected_command = format!("command = {}", toml_string(&command));
+            let ok = section.contains(&expected_command)
+                && section.contains(ROOT_AUTO_TOML_ARGS)
+                && section.contains("cwd = \".\"")
+                && section.contains("enabled_tools = [\"repo_context\"]");
             println!("Codex MCP config: {}", if ok { "OK" } else { "MISMATCH" });
             if ok {
                 CheckStatus::Ok
