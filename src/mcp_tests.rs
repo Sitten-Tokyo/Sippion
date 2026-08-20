@@ -174,8 +174,8 @@ fn tool_schema_validation_errors_are_model_visible_execution_errors() {
     });
     let service = PanicService;
     let limiter = ToolRateLimiter::default();
-    let result = call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy)
-        .expect("tool result");
+    let result =
+        call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy).expect("tool result");
     assert_eq!(result["isError"], true);
     assert!(
         result["content"][0]["text"]
@@ -192,8 +192,8 @@ fn invalid_query_shape_is_rejected_before_rate_budget_or_repository_scan() {
     });
     let service = PanicService;
     let limiter = ToolRateLimiter::default();
-    let result = call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy)
-        .expect("tool result");
+    let result =
+        call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy).expect("tool result");
     assert_eq!(result["isError"], true);
     assert!(
         result["content"][0]["text"]
@@ -215,8 +215,8 @@ fn valid_tool_call_uses_repository_service_boundary() {
     });
     let service = StaticService;
     let limiter = ToolRateLimiter::default();
-    let result = call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy)
-        .expect("tool result");
+    let result =
+        call_tool(&service, &params, None, &limiter, ProtocolMode::Legacy).expect("tool result");
     assert_eq!(result["isError"], false);
     assert_eq!(
         result["content"][0]["text"].as_str(),
@@ -437,7 +437,6 @@ fn cancellation_while_waiting_for_stdout_suppresses_response() {
     )])));
     let writer = Arc::new(Mutex::new(Vec::<u8>::new()));
 
-    // Keep stdout busy so the worker cannot commit its response yet.
     let held_writer = writer.lock().expect("writer");
     let worker_writer = Arc::clone(&writer);
     let worker_inflight = Arc::clone(&inflight);
