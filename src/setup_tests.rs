@@ -53,7 +53,9 @@ fn json_server_preserves_other_servers_and_is_removable() {
     );
     let value = read_optional_json(&path).unwrap().unwrap();
     assert!(value["mcpServers"]["other"].is_object());
-    assert!(is_current_sippion_json_entry(&value["mcpServers"]["sippion"]));
+    assert!(is_current_sippion_json_entry(
+        &value["mcpServers"]["sippion"]
+    ));
     assert_eq!(remove_json_server(&path).unwrap(), FileChange::Updated);
     assert!(read_optional_json(&path).unwrap().unwrap()["mcpServers"]["sippion"].is_null());
 }
@@ -130,8 +132,14 @@ fn setup_snapshot_rollback_restores_targets_and_legacy_backups() {
 
     #[cfg(unix)]
     {
-        assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 }
 
@@ -174,8 +182,12 @@ fn managed_file_symlinks_are_rejected() {
     fs::write(&real, "{}\n").unwrap();
     symlink(&real, &managed).unwrap();
 
-    let error = write_text_if_changed(&managed, "{\"changed\":true}\n", FileSecurity::PrivateConfig)
-        .expect_err("symlink rejected");
+    let error = write_text_if_changed(
+        &managed,
+        "{\"changed\":true}\n",
+        FileSecurity::PrivateConfig,
+    )
+    .expect_err("symlink rejected");
     assert!(error.contains("symlinked managed file"));
     assert_eq!(fs::read_to_string(real).unwrap(), "{}\n");
 }
