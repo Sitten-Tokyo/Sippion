@@ -1,5 +1,21 @@
 use super::*;
 
+fn has_effective_ignore_control(directory: &Path) -> bool {
+    [".gitignore", ".ignore"].into_iter().any(|name| {
+        let path = directory.join(name);
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => contents.lines().any(|line| {
+                let trimmed = line.trim_start();
+                !trimmed.is_empty()
+                    && (!trimmed.starts_with('#') || trimmed.starts_with("\\#"))
+            }),
+            // An existing but unreadable/non-UTF-8 ignore control may still hide content. Keep the
+            // conservative sentinel in that case rather than upgrading absence to a false NO_MATCH.
+            Err(_) => std::fs::symlink_metadata(path).is_ok(),
+        }
+    })
+}
+
 impl RepositoryAccess {
     #[cfg(test)]
     pub fn open(root_path: impl AsRef<Path>) -> Result<Self, RepositoryAccessError> {
@@ -146,16 +162,11 @@ impl RepositoryAccess {
         // can never be reported as an absolute NO_MATCH when policy hid repository content. A
         // pruned directory counts as one exclusion sentinel even though its subtree size is unknown.
         //
-        // The ignore walker can also hide entries before the discovery loop sees them. Treat every
-        // visible directory containing a .gitignore/.ignore control file as one conservative policy
-        // exclusion sentinel. This deliberately does not inspect the ignored subtree: privacy and
-        // performance semantics stay unchanged, while repository-wide absence claims stay sound.
-        let has_ignore_control = |directory: &Path| {
-            [".gitignore", ".ignore"]
-                .into_iter()
-                .any(|name| std::fs::symlink_metadata(directory.join(name)).is_ok())
-        };
-        let root_ignore_sentinel = if has_ignore_control(&root_path) { 1 } else { 0 };
+        // The ignore walker can also hide entries before the discovery loop sees them. A directory
+        // contributes one conservative sentinel only when its .gitignore/.ignore contains at least
+        // one effective rule. Empty and comment-only control files do not imply hidden content.
+        // Unreadable controls remain conservative because their effect cannot be established safely.
+        let root_ignore_sentinel = usize::from(has_effective_ignore_control(&root_path));
         let prefiltered_policy_exclusions = Arc::new(AtomicUsize::new(root_ignore_sentinel));
         let filter_exclusions = Arc::clone(&prefiltered_policy_exclusions);
         builder.filter_entry(move |entry| {
@@ -163,7 +174,7 @@ impl RepositoryAccess {
                 return true;
             }
             if entry.file_type().is_some_and(|kind| kind.is_dir())
-                && has_ignore_control(entry.path())
+                && has_effective_ignore_control(entry.path())
             {
                 filter_exclusions.fetch_add(1, AtomicOrdering::Relaxed);
             }
