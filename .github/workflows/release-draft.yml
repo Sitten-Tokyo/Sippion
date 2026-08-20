@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, for example v0.1.0-rc.31
+        description: Existing release tag to build; dispatch this workflow from the same tag ref
         required: true
         type: string
   push:
@@ -76,17 +76,17 @@ jobs:
             exit 2
           fi
 
+          expected_version=${release_tag#v}
+          manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          if [ "$manifest_version" != "$expected_version" ]; then
+            echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+            exit 2
+          fi
+
           if [ "$EVENT_NAME" = "push" ]; then
             main_sha=$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')
             if [ "$CURRENT_SHA" != "$main_sha" ]; then
               echo "Release branch must point exactly at current main ($main_sha), got $CURRENT_SHA." >&2
-              exit 2
-            fi
-
-            expected_version=${release_tag#v}
-            manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-            if [ "$manifest_version" != "$expected_version" ]; then
-              echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
               exit 2
             fi
 
@@ -104,6 +104,14 @@ jobs:
             fi
           else
             resolved_sha=$(resolve_tag "$release_tag")
+            # Artifact attestations identify the workflow invocation's source
+            # commit. Refuse to build an arbitrary tag from a workflow run rooted
+            # at some other branch/commit, or provenance would name the wrong
+            # source. In the Actions UI select the release tag as the run ref.
+            if [ "$CURRENT_SHA" != "$resolved_sha" ]; then
+              echo "Manual release must be dispatched from tag $release_tag itself: tag resolves to $resolved_sha but workflow source is $CURRENT_SHA." >&2
+              exit 2
+            fi
           fi
 
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
@@ -115,6 +123,7 @@ jobs:
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ needs.prepare-release.outputs.sha }}
+      attest: true
     permissions:
       contents: read
       id-token: write
@@ -134,6 +143,14 @@ jobs:
         with:
           ref: ${{ needs.prepare-release.outputs.sha }}
           persist-credentials: false
+
+      - name: Verify checkout matches attested release source
+        env:
+          EXPECTED_SHA: ${{ needs.prepare-release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Download platform artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
