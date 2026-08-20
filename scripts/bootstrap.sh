@@ -33,15 +33,35 @@ sha256_file() {
   fi
 }
 
+github_api_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+if [ -z "$github_api_token" ] && command -v gh >/dev/null 2>&1; then
+  github_api_token=$(gh auth token 2>/dev/null || true)
+fi
+
+github_api_download() {
+  url=$1
+  output=$2
+  if [ -n "$github_api_token" ]; then
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      -H "Authorization: Bearer $github_api_token" \
+      "$url" --output "$output"
+  else
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "$url" --output "$output"
+  fi
+}
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 release_json="$tmp/releases.json"
-curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
-  -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2026-03-10' \
+github_api_download \
   "https://api.github.com/repos/$repo/releases?per_page=1" \
-  --output "$release_json"
+  "$release_json"
 tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
 if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
   echo "Could not resolve a valid published Sippion release tag." >&2
