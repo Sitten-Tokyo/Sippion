@@ -1,0 +1,79 @@
+name: Release supply-chain smoke
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-build.yml
+      - .github/workflows/release-draft.yml
+      - .github/workflows/release-supply-chain-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Exercise reusable release build
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+  assemble-and-attest:
+    name: Exercise release download and installer attestation
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sippion-*
+          path: downloaded
+          merge-multiple: false
+
+      - name: Validate downloaded release payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in \
+            sippion-linux-x86_64 \
+            sippion-windows-x86_64.exe \
+            sippion-macos-aarch64 \
+            sippion-macos-x86_64; do
+            test -s "downloaded/$artifact/$artifact"
+            test -s "downloaded/$artifact/$artifact.sha256"
+            test -s "downloaded/$artifact/SHA256SUMS"
+          done
+
+      - name: Stage installer assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p installer-smoke
+          cp scripts/install.sh installer-smoke/install.sh
+          cp scripts/install.ps1 installer-smoke/install.ps1
+          sha256sum installer-smoke/install.sh installer-smoke/install.ps1 > installer-smoke/SHA256SUMS
+
+      - name: Attest installer provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            installer-smoke/install.sh
+            installer-smoke/install.ps1
