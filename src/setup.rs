@@ -752,12 +752,12 @@ fn desired_permissions(
     }
     #[cfg(unix)]
     {
-        return Some(match security {
+        Some(match security {
             FileSecurity::PrivateConfig => fs::Permissions::from_mode(0o600),
             FileSecurity::Preserve => existing
                 .cloned()
                 .unwrap_or_else(|| fs::Permissions::from_mode(0o644)),
-        });
+        })
     }
     #[cfg(not(unix))]
     {
