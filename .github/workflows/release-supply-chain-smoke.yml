@@ -3,6 +3,10 @@ name: Release supply-chain smoke
 on:
   pull_request:
     paths:
+      - scripts/bootstrap.sh
+      - scripts/bootstrap.ps1
+      - scripts/install.sh
+      - scripts/install.ps1
       - .github/workflows/release-build.yml
       - .github/workflows/release-draft.yml
       - .github/workflows/release-supply-chain-smoke.yml
@@ -17,23 +21,20 @@ concurrency:
 
 jobs:
   build:
-    name: Exercise reusable release build
+    name: Exercise reusable release build without signing test artifacts
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      attest: false
     permissions:
       contents: read
-      id-token: write
-      attestations: write
 
-  assemble-and-attest:
-    name: Exercise release download and installer attestation
+  validate-and-verify:
+    name: Validate payload assembly and strict published provenance
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +42,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Download platform artifacts
+      - name: Download unsigned PR build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sippion-*
@@ -62,7 +63,7 @@ jobs:
             test -s "downloaded/$artifact/SHA256SUMS"
           done
 
-      - name: Stage installer assets
+      - name: Validate installer staging and checksums
         shell: bash
         run: |
           set -euo pipefail
@@ -70,10 +71,54 @@ jobs:
           cp scripts/install.sh installer-smoke/install.sh
           cp scripts/install.ps1 installer-smoke/install.ps1
           sha256sum installer-smoke/install.sh installer-smoke/install.ps1 > installer-smoke/SHA256SUMS
+          test -s installer-smoke/SHA256SUMS
 
-      - name: Attest installer provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            installer-smoke/install.sh
-            installer-smoke/install.ps1
+      - name: Verify strict policy against newest published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resolve_tag() {
+            local release_tag=$1
+            local object_type
+            local object_sha
+            object_type=$(gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" --jq '.object.type')
+            object_sha=$(gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" --jq '.object.sha')
+            while [ "$object_type" = "tag" ]; do
+              object_type=$(gh api "repos/$REPOSITORY/git/tags/$object_sha" --jq '.object.type')
+              object_sha=$(gh api "repos/$REPOSITORY/git/tags/$object_sha" --jq '.object.sha')
+            done
+            test "$object_type" = commit
+            [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s\n' "$object_sha"
+          }
+
+          tag=$(gh api "repos/$REPOSITORY/releases?per_page=20" \
+            --jq '[.[] | select(.draft == false and .published_at != null)][0].tag_name // empty')
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          source_sha=$(resolve_tag "$tag")
+          mkdir -p published
+          base="https://github.com/$REPOSITORY/releases/download/$tag"
+          for asset in sippion-linux-x86_64 install.sh install.ps1; do
+            curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --silent --show-error "$base/$asset" --output "published/$asset"
+            curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --silent --show-error "$base/$asset.sha256" --output "published/$asset.sha256"
+            expected=$(awk 'NR == 1 { print $1; exit }' "published/$asset.sha256")
+            actual=$(sha256sum "published/$asset" | awk '{ print $1 }')
+            test "$actual" = "$expected"
+          done
+
+          gh attestation verify published/sippion-linux-x86_64 \
+            --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release-build.yml" \
+            --source-digest "$source_sha" >/dev/null
+          for installer in install.sh install.ps1; do
+            gh attestation verify "published/$installer" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+              --source-digest "$source_sha" >/dev/null
+          done
