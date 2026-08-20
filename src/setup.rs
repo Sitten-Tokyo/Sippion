@@ -712,16 +712,12 @@ mod tests {
     #[test]
     fn malformed_or_duplicate_managed_markers_fail_closed() {
         let malformed = format!("prefix\n{RULE_BEGIN}\nuser-owned-setting=true\n");
-        assert!(
-            upsert_marked_block(&malformed, RULE_BEGIN, RULE_END, "replacement").is_err()
-        );
+        assert!(upsert_marked_block(&malformed, RULE_BEGIN, RULE_END, "replacement").is_err());
         assert!(remove_block(&malformed, RULE_BEGIN, RULE_END).is_err());
         let duplicate = format!(
             "{RULE_BEGIN}\na\n{RULE_END}\nuser-owned-setting=true\n{RULE_BEGIN}\nb\n{RULE_END}\n"
         );
-        assert!(
-            upsert_marked_block(&duplicate, RULE_BEGIN, RULE_END, "replacement").is_err()
-        );
+        assert!(upsert_marked_block(&duplicate, RULE_BEGIN, RULE_END, "replacement").is_err());
         assert!(remove_block(&duplicate, RULE_BEGIN, RULE_END).is_err());
     }
 
