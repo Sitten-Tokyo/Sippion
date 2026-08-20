@@ -41,14 +41,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Unix bootstrap download chain without GitHub auth
+      - name: Verify Unix bootstrap download chain
         if: runner.os != 'Windows'
         shell: sh
         env:
+          GH_TOKEN: ${{ github.token }}
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
-        run: |
-          unset GH_TOKEN GITHUB_TOKEN
-          sh scripts/bootstrap.sh
+        run: sh scripts/bootstrap.sh
 
       - name: Exercise Unix attested one-command install in isolated home
         if: runner.os != 'Windows'
@@ -76,11 +75,10 @@ jobs:
         if: runner.os != 'Windows'
         shell: sh
         env:
+          GH_TOKEN: ${{ github.token }}
           SIPPION_REQUIRE_ATTESTATION: '0'
           SIPPION_INSTALL_VERIFY_ONLY: '1'
-        run: |
-          unset GH_TOKEN GITHUB_TOKEN
-          sh scripts/install.sh
+        run: sh scripts/install.sh
 
       - name: Verify Unix direct installer attestation path
         if: runner.os != 'Windows'
@@ -91,15 +89,13 @@ jobs:
           SIPPION_INSTALL_VERIFY_ONLY: '1'
         run: sh scripts/install.sh
 
-      - name: Verify Windows bootstrap download chain without GitHub auth
+      - name: Verify Windows bootstrap download chain
         if: runner.os == 'Windows'
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
-        run: |
-          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-          & scripts/bootstrap.ps1
+        run: '& scripts/bootstrap.ps1'
 
       - name: Exercise Windows attested one-command install in isolated home
         if: runner.os == 'Windows'
@@ -130,12 +126,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           SIPPION_REQUIRE_ATTESTATION: '0'
           SIPPION_INSTALL_VERIFY_ONLY: '1'
-        run: |
-          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-          & scripts/install.ps1
+        run: '& scripts/install.ps1'
 
       - name: Verify Windows direct installer attestation path
         if: runner.os == 'Windows'
