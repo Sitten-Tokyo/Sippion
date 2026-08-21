@@ -1,0 +1,94 @@
+name: Enable trusted author auto-merge
+
+# This is intentionally pull_request_target: GitHub evaluates the workflow from
+# the base branch, and this job never checks out or executes PR contents.
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: trusted-author-auto-merge-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  enable:
+    if: >-
+      github.repository == 'Sitten-Tokyo/Sippion' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.user.login == 'Sitten-Tokyo' &&
+      github.event.pull_request.user.type == 'User' &&
+      github.event.pull_request.head.repo.full_name == 'Sitten-Tokyo/Sippion' &&
+      github.event.pull_request.head.repo.fork == false &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Revalidate PR from GitHub API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PR number" >&2
+            exit 1
+          fi
+          if [[ ! "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid head SHA" >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+
+          jq -e \
+            --arg repository "$REPOSITORY" \
+            --arg expected_head_sha "$EVENT_HEAD_SHA" '
+              .state == "open"
+              and .draft == false
+              and .base.ref == "main"
+              and .user.login == "Sitten-Tokyo"
+              and .user.type == "User"
+              and .head.repo.full_name == "Sitten-Tokyo/Sippion"
+              and .head.repo.full_name == $repository
+              and .head.repo.fork == false
+              and .head.sha == $expected_head_sha
+            ' <<<"$pr_json" >/dev/null
+
+          echo "PR identity and head SHA revalidated."
+
+      - name: Enable GitHub native auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          if [[ "$(jq -r '.auto_merge != null' <<<"$pr_json")" == "true" ]]; then
+            echo "Native auto-merge is already enabled; no action needed."
+            exit 0
+          fi
+
+          gh pr merge "$PR_NUMBER" \
+            --repo "$REPOSITORY" \
+            --auto \
+            --squash \
+            --match-head-commit "$EVENT_HEAD_SHA"
