@@ -55,10 +55,19 @@ fn infer_project_root(start: &Path, home: Option<&Path>) -> Result<PathBuf, Stri
         return Err("current project path is not a directory".to_string());
     }
 
-    let mut current = start.clone();
-    let mut marker_fallback = None;
+    let mut current = start;
     loop {
-        if has_git_marker(&current) {
+        // Automatic discovery must never trust a boundary marker placed in a directory that is
+        // writable by other local users/groups. In particular, a fake /tmp/.git must not expand a
+        // marker-less project into a broad shared tree. An intentional scan can still use explicit
+        // --root together with the existing broad-root opt-in when appropriate.
+        if is_shared_writable_directory(&current) {
+            break;
+        }
+
+        // The nearest recognized project boundary wins. Continuing past a nearer manifest in
+        // search of an outer .git marker lets an unrelated ancestor silently widen read scope.
+        if has_git_marker(&current) || has_project_marker(&current) {
             if is_broad_root(&current, home) {
                 return Err(
                     "automatic project-root discovery resolved to an over-broad directory; open the AI client inside a project or configure an explicit project root"
@@ -68,10 +77,6 @@ fn infer_project_root(start: &Path, home: Option<&Path>) -> Result<PathBuf, Stri
             return Ok(current);
         }
 
-        if marker_fallback.is_none() && has_project_marker(&current) {
-            marker_fallback = Some(current.clone());
-        }
-
         let Some(parent) = current.parent() else {
             break;
         };
@@ -79,16 +84,6 @@ fn infer_project_root(start: &Path, home: Option<&Path>) -> Result<PathBuf, Stri
             break;
         }
         current = parent.to_path_buf();
-    }
-
-    if let Some(root) = marker_fallback {
-        if is_broad_root(&root, home) {
-            return Err(
-                "automatic project-root discovery resolved to an over-broad directory; open the AI client inside a project or configure an explicit project root"
-                    .to_string(),
-            );
-        }
-        return Ok(root);
     }
 
     Err(
@@ -108,6 +103,20 @@ fn has_project_marker(path: &Path) -> bool {
         fs::symlink_metadata(path.join(marker))
             .is_ok_and(|metadata| !metadata.file_type().is_symlink() && metadata.is_file())
     })
+}
+
+#[cfg(unix)]
+fn is_shared_writable_directory(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path).is_ok_and(|metadata| {
+        metadata.is_dir() && metadata.permissions().mode() & 0o022 != 0
+    })
+}
+
+#[cfg(not(unix))]
+fn is_shared_writable_directory(_path: &Path) -> bool {
+    false
 }
 
 fn is_broad_root(path: &Path, home: Option<&Path>) -> bool {
@@ -151,15 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_root_prefers_git_root_over_nested_manifest() {
-        let root = temp_dir("git");
+    fn auto_root_uses_nearest_boundary_before_outer_git_marker() {
+        let root = temp_dir("nearest-boundary");
         fs::create_dir(root.join(".git")).expect("git marker");
         let nested = root.join("crates").join("child");
         fs::create_dir_all(&nested).expect("nested");
         fs::write(nested.join("Cargo.toml"), "[package]\nname='child'\n").expect("manifest");
 
         let resolved = infer_project_root(&nested, None).expect("root");
-        assert_eq!(resolved, fs::canonicalize(&root).unwrap());
+        assert_eq!(resolved, fs::canonicalize(&nested).unwrap());
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -173,6 +182,22 @@ mod tests {
         let resolved = infer_project_root(&nested, None).expect("root");
         assert_eq!(resolved, fs::canonicalize(&root).unwrap());
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auto_root_does_not_trust_shared_writable_ancestor_marker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let shared = temp_dir("shared-ancestor");
+        fs::create_dir(shared.join(".git")).expect("fake git marker");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).expect("shared mode");
+        let nested = shared.join("unmarked-project").join("src");
+        fs::create_dir_all(&nested).expect("nested");
+
+        let error = infer_project_root(&nested, None).expect_err("shared marker rejected");
+        assert!(error.contains("cannot infer a safe project root"));
+        fs::remove_dir_all(shared).expect("cleanup");
     }
 
     #[test]
