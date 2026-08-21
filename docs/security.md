@@ -12,6 +12,9 @@ Sippion is deliberately local and read-only:
   persistent configuration backup, or automatic tool approval;
 - repository reads refuse symlinks and reject multi-hard-linked files on Unix
   and Windows; root identity and source metadata are revalidated around reads;
+- sensitive credential/config and pruned dependency/build paths use ASCII
+  case-insensitive policy matching so case-insensitive filesystems cannot bypass
+  them with alternate casing;
 - production retrieval does not execute repository code, shell commands, build
   scripts, procedural macros, an LSP, or a compiler frontend;
 - file size, discovery, scan, AST, wall-clock, concurrency, result, and output
@@ -40,9 +43,17 @@ network, credential, or shell-capable tools.
 
 Setup-generated Codex, Claude Code, and Antigravity registrations launch
 `sippion mcp --root-auto`. Automatic discovery starts at the process current
-directory, prefers an enclosing Git worktree marker, and otherwise uses the
-nearest supported project manifest such as `Cargo.toml`, `package.json`,
-`pyproject.toml`, or `go.mod`. Marker symlinks are not accepted.
+directory and selects the nearest recognized project boundary: a Git worktree
+marker or a supported project manifest such as `Cargo.toml`, `package.json`,
+`pyproject.toml`, or `go.mod`. It does not continue past a nearer project
+manifest merely to prefer a farther ancestor `.git` marker. Marker symlinks are
+not accepted.
+
+On Unix, automatic discovery also stops before trusting a directory writable by
+group or other users. This prevents an attacker from widening a marker-less
+project into a shared ancestor by placing a forged boundary marker such as
+`/tmp/.git`. An intentionally selected shared project can still be supplied as
+an explicit root subject to the explicit-root guards.
 
 Automatic discovery fails closed when it cannot identify a project or when the
 candidate is the user's home directory, an ancestor of that home directory, or
