@@ -53,10 +53,13 @@ Codex + Claude Code + Antigravity に事前登録
 Sippionは、**3クライアントすべてに事前登録**します。今そのクライアントが
 インストールされていなくても設定は作られます。
 
-各クライアントはSippionを `--root-auto` で起動します。Sippionはまず親方向のGitリポジトリを探し、
-見つからなければ近いproject manifest（プロジェクトを示す設定ファイル）を使ってルートを確定します。
-ユーザーのhome directory（ホームディレクトリ）やfilesystem root（ファイルシステム最上位）を
-自動選択する場合はfail closedで拒否します。リポジトリごとにSippionを登録し直す必要はありません。
+各クライアントはSippionを `--root-auto` で起動します。Sippionは現在位置から最も近い
+Git/project boundary（Gitまたはproject manifestで示されるプロジェクト境界）をルートに選びます。
+外側の `.git` を探すために、より近いproject manifestを越えて探索範囲を広げることはありません。
+またUnix系では、group/other-writable directory（同じグループや他ユーザーが書き込める共有ディレクトリ）を
+自動境界として信頼しません。ユーザーのhome directory（ホームディレクトリ）やfilesystem root
+（ファイルシステム最上位）を自動選択する場合もfail closedで拒否します。
+リポジトリごとにSippionを登録し直す必要はありません。
 
 別の信頼できる方法でprovenanceを検証済みの管理環境向けには、checksumのみで進める
 明示的なopt-out（利用者が意図して検証を外す設定）もdirect installerに残しています。
@@ -147,6 +150,10 @@ Unix系ではMCP client config（MCPクライアント設定）を `0600`（所�
 ```sh
 sippion mcp --root-auto
 ```
+
+自動推定では最も近いGit/project marker（プロジェクト境界を示す目印）を採用します。
+より近いmanifestを越えて外側の `.git` を優先することはなく、Unix系では他ユーザーや
+グループが書き込める共有ディレクトリを自動境界として信頼しません。
 
 特定のプロジェクトを明示的にルートとして起動する場合:
 
