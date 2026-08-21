@@ -72,9 +72,11 @@ project:
 sippion mcp --root-auto
 ```
 
-Automatic discovery prefers an enclosing Git repository, then a nearby project
-manifest, and fails closed rather than selecting the user's home directory or
-filesystem root.
+Automatic discovery selects the nearest recognized Git/project boundary. It
+does not continue past a nearer project manifest merely to prefer a farther
+`.git` marker, and on Unix it refuses to trust group/other-writable shared
+directories as automatic boundaries. Home-directory and filesystem-root
+selection also fails closed.
 
 You can also bind each process explicitly to one trusted project root:
 
