@@ -109,9 +109,8 @@ fn has_project_marker(path: &Path) -> bool {
 fn is_shared_writable_directory(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::metadata(path).is_ok_and(|metadata| {
-        metadata.is_dir() && metadata.permissions().mode() & 0o022 != 0
-    })
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_dir() && metadata.permissions().mode() & 0o022 != 0)
 }
 
 #[cfg(not(unix))]
