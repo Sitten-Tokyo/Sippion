@@ -53,16 +53,32 @@ sippion uninstall
 `setup` is idempotent and transactional across its managed client files.
 Existing Sippion-managed text blocks are rewritten only when exactly one ordered
 BEGIN/END marker pair is present; malformed or duplicate markers cause a
-fail-closed error instead of risking unrelated settings. If any setup operation
-fails, files touched by that setup attempt are restored to their pre-attempt
-state. `doctor` reports missing, mismatched, malformed, or unreadable
+fail-closed error instead of risking unrelated settings. Managed-file symlinks
+are refused. On Unix, MCP configuration files are owner-only `0600` and rollback
+restores the previous permission bits. Setup does not create persistent
+`.sippion-backup` copies; legacy copies are removed transactionally. If any
+setup operation fails, files touched by that setup attempt are restored to their
+pre-attempt state. `doctor` reports missing, mismatched, malformed, or unreadable
 registrations and exits non-zero when any expected registration is unhealthy.
 `uninstall` removes only Sippion-managed entries and rules; it does not remove
 the binary or unrelated settings.
 
 ## Run locally
 
-Bind each process to one trusted project root:
+Use guarded automatic discovery when the process starts inside the active
+project:
+
+```sh
+sippion mcp --root-auto
+```
+
+Automatic discovery selects the nearest recognized Git/project boundary. It
+does not continue past a nearer project manifest merely to prefer a farther
+`.git` marker, and on Unix it refuses to trust group/other-writable shared
+directories as automatic boundaries. Home-directory and filesystem-root
+selection also fails closed.
+
+You can also bind each process explicitly to one trusted project root:
 
 ```sh
 sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT
@@ -70,8 +86,9 @@ sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT --scan-budget-mib 128
 ```
 
 The default adaptive ceiling is 512 MiB and retrieval normally starts at
-32 MiB. Use an absolute root when a client does not start in the active
-project directory.
+32 MiB. Explicit home-directory, filesystem-root, or home-ancestor scans are
+rejected unless a manual invocation also supplies `--allow-broad-root`. Setup
+never enables that override.
 
 ## Manual client registration
 
@@ -80,7 +97,7 @@ Codex user configuration (`~/.codex/config.toml`):
 ```toml
 [mcp_servers.sippion]
 command = "/ABSOLUTE/PATH/TO/sippion"
-args = ["mcp", "--root", "."]
+args = ["mcp", "--root-auto"]
 cwd = "."
 enabled_tools = ["repo_context"]
 ```
@@ -89,7 +106,7 @@ Claude Code:
 
 ```sh
 claude mcp add --transport stdio --scope user sippion -- \
-  /ABSOLUTE/PATH/TO/sippion mcp --root .
+  /ABSOLUTE/PATH/TO/sippion mcp --root-auto
 ```
 
 Use `claude mcp list` or `/mcp` to verify the registration. Antigravity uses
@@ -101,7 +118,7 @@ Use `claude mcp list` or `/mcp` to verify the registration. Antigravity uses
   "mcpServers": {
     "sippion": {
       "command": "/ABSOLUTE/PATH/TO/sippion",
-      "args": ["mcp", "--root", "."],
+      "args": ["mcp", "--root-auto"],
       "cwd": "."
     }
   }

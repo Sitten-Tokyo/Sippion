@@ -53,9 +53,13 @@ Codex + Claude Code + Antigravity に事前登録
 Sippionは、**3クライアントすべてに事前登録**します。今そのクライアントが
 インストールされていなくても設定は作られます。
 
-各クライアントはSippionを `--root .` で起動するため、そのクライアントで開いた
-プロジェクトがSippionの読み取り専用ルートになります。リポジトリごとにSippionを
-登録し直す必要はありません。
+各クライアントはSippionを `--root-auto` で起動します。Sippionは現在位置から最も近い
+Git/project boundary（Gitまたはproject manifestで示されるプロジェクト境界）をルートに選びます。
+外側の `.git` を探すために、より近いproject manifestを越えて探索範囲を広げることはありません。
+またUnix系では、group/other-writable directory（同じグループや他ユーザーが書き込める共有ディレクトリ）を
+自動境界として信頼しません。ユーザーのhome directory（ホームディレクトリ）やfilesystem root
+（ファイルシステム最上位）を自動選択する場合もfail closedで拒否します。
+リポジトリごとにSippionを登録し直す必要はありません。
 
 別の信頼できる方法でprovenanceを検証済みの管理環境向けには、checksumのみで進める
 明示的なopt-out（利用者が意図して検証を外す設定）もdirect installerに残しています。
@@ -128,8 +132,12 @@ sippion uninstall
 
 `setup` は何度実行しても同じ状態に収束し、管理対象ファイル全体についてtransactionalに動作します。
 また、Sippion管理ブロックのBEGIN/ENDマーカーが欠落・重複・逆順になっている場合は、
-関係ないユーザー設定を巻き込まないよう**書き換えずエラー終了**します。いずれかのクライアント設定に
-失敗した場合、そのsetup試行で触れたファイルは開始前の状態へ戻します。
+関係ないユーザー設定を巻き込まないよう**書き換えずエラー終了**します。
+管理対象の設定ファイル自体がsymlinkの場合も書き換えを拒否します。
+Unix系ではMCP client config（MCPクライアント設定）を `0600`（所有者だけが読み書き可能）に
+作成・補修し、rollback（失敗時の復元）でも元のpermission bits（アクセス権）を戻します。
+永続的な `.sippion-backup` は新規作成せず、旧バージョンが残したものはsetup時にtransactionalに削除します。
+いずれかのクライアント設定に失敗した場合、そのsetup試行で触れたファイルは開始前の状態へ戻します。
 `doctor` は登録状態を診断し、MISSING / MISMATCH / ERRORが1件でもあれば非0終了します。
 `uninstall` はSippionが管理しているクライアント設定とルールだけを削除し、関係のない設定は触りません。
 
@@ -137,11 +145,25 @@ sippion uninstall
 
 ## Sippionを手動起動する
 
+現在ディレクトリから安全なproject root（プロジェクトの読み取り範囲）を自動推定する場合:
+
+```sh
+sippion mcp --root-auto
+```
+
+自動推定では最も近いGit/project marker（プロジェクト境界を示す目印）を採用します。
+より近いmanifestを越えて外側の `.git` を優先することはなく、Unix系では他ユーザーや
+グループが書き込める共有ディレクトリを自動境界として信頼しません。
+
 特定のプロジェクトを明示的にルートとして起動する場合:
 
 ```sh
 sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT
 ```
+
+home directory、filesystem root、またはhome directoryの親ディレクトリを明示rootにする操作は
+デフォルトで拒否します。本当に広域走査を意図する手動実行だけ、`--allow-broad-root` を明示してください。
+`sippion setup` がこのoverride（安全制限の明示解除）を自動設定することはありません。
 
 adaptive scan ceiling（適応的な走査上限）を下げる場合:
 

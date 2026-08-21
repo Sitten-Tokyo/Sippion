@@ -218,9 +218,15 @@ pub(super) fn is_obvious_binary(path: &Path) -> bool {
 pub(super) fn is_pruned(path: &Path) -> bool {
     // Non-UTF-8 paths are not lossy-normalized here. Discovery will reach the file and
     // normalize_relative() will mark the scan incomplete instead of collapsing distinct names.
+    // Policy matching is ASCII case-insensitive because Windows and common macOS filesystems can
+    // resolve differently-cased spellings to the same entry.
     let Some(parts) = path_parts(path) else {
         return false;
     };
+    let parts = parts
+        .into_iter()
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>();
     if parts.iter().any(|part| {
         BUILTIN_PRUNED_DIRS.contains(&part.as_str()) || part.starts_with("cmake-build-")
     }) {
@@ -233,10 +239,16 @@ pub(super) fn is_pruned(path: &Path) -> bool {
 
 pub(super) fn is_denied(path: &Path) -> bool {
     // Do not convert invalid OS strings with U+FFFD: that can alias distinct filesystem paths.
-    // Let strict normalization reject them later so completeness is reported accurately.
+    // Let strict normalization reject them later so completeness is reported accurately. For
+    // valid Unicode names, ASCII-fold policy tokens so case-insensitive filesystems cannot bypass
+    // credential/config denials with spellings such as `.SSH`, `.ENV`, or `ID_RSA`.
     let Some(parts) = path_parts(path) else {
         return false;
     };
+    let parts = parts
+        .into_iter()
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>();
     if parts.iter().any(|part| {
         matches!(
             part.as_str(),
@@ -317,5 +329,26 @@ pub(super) fn map_io(error: std::io::Error) -> RepositoryAccessError {
     match error.kind() {
         std::io::ErrorKind::NotFound => RepositoryAccessError::NotFound,
         _ => RepositoryAccessError::Io,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_path_policy_is_ascii_case_insensitive() {
+        assert!(is_denied(Path::new(".SSH/ID_RSA")));
+        assert!(is_denied(Path::new("nested/.ENV.Production")));
+        assert!(is_denied(Path::new("Secrets.JSON")));
+        assert!(is_denied(Path::new(".GIT/config")));
+        assert!(!is_denied(Path::new(".ENV.Example")));
+    }
+
+    #[test]
+    fn prune_policy_is_ascii_case_insensitive() {
+        assert!(is_pruned(Path::new("TARGET/debug/sippion")));
+        assert!(is_pruned(Path::new("Cargo.LOCK")));
+        assert!(is_pruned(Path::new("CMAKE-BUILD-Debug/cache.txt")));
     }
 }

@@ -6,10 +6,15 @@ Sippion is deliberately local and read-only:
   credential handling, model API proxy, daemon, or persistent repository index;
 - each process is bound to one intentionally selected project root and does not
   write the repository or create a repository-wide home-directory root;
-- setup preserves unrelated client settings and does not create a secret store
-  or automatic tool approval;
+- setup-generated registrations use fail-closed automatic project-root
+  discovery instead of trusting a client-supplied `cwd` as the final boundary;
+- setup preserves unrelated client settings and does not create a secret store,
+  persistent configuration backup, or automatic tool approval;
 - repository reads refuse symlinks and reject multi-hard-linked files on Unix
   and Windows; root identity and source metadata are revalidated around reads;
+- sensitive credential/config and pruned dependency/build paths use ASCII
+  case-insensitive policy matching so case-insensitive filesystems cannot bypass
+  them with alternate casing;
 - production retrieval does not execute repository code, shell commands, build
   scripts, procedural macros, an LSP, or a compiler frontend;
 - file size, discovery, scan, AST, wall-clock, concurrency, result, and output
@@ -34,6 +39,30 @@ process to the intended project rather than a broad parent folder, and avoid
 combining untrusted repository analysis with automatic approval of write,
 network, credential, or shell-capable tools.
 
+## Project-root selection
+
+Setup-generated Codex, Claude Code, and Antigravity registrations launch
+`sippion mcp --root-auto`. Automatic discovery starts at the process current
+directory and selects the nearest recognized project boundary: a Git worktree
+marker or a supported project manifest such as `Cargo.toml`, `package.json`,
+`pyproject.toml`, or `go.mod`. It does not continue past a nearer project
+manifest merely to prefer a farther ancestor `.git` marker. Marker symlinks are
+not accepted.
+
+On Unix, automatic discovery also stops before trusting a directory writable by
+group or other users. This prevents an attacker from widening a marker-less
+project into a shared ancestor by placing a forged boundary marker such as
+`/tmp/.git`. An intentionally selected shared project can still be supplied as
+an explicit root subject to the explicit-root guards.
+
+Automatic discovery fails closed when it cannot identify a project or when the
+candidate is the user's home directory, an ancestor of that home directory, or
+the filesystem root. Explicit `sippion mcp --root <path>` applies the same broad
+root guard. A deliberately broad manual scan requires `--allow-broad-root`;
+setup never adds that override. This keeps a client that happens to launch from
+an unexpectedly broad working directory from silently granting Sippion the
+same broad read scope.
+
 ## Client-configuration mutation safety
 
 `sippion setup` and `sippion uninstall` modify only their documented per-user
@@ -41,22 +70,31 @@ client configuration and rule files. Text files managed with Sippion BEGIN/END
 markers are treated conservatively: exactly one ordered marker pair is required
 before an existing managed block can be replaced or removed. Missing halves,
 duplicate markers, or reversed markers cause the operation to fail closed
-without modifying that file.
+without modifying that file. Managed files that are themselves symlinks are
+also refused rather than followed or replaced.
 
 Before a setup attempt, Sippion snapshots all six managed client configuration
-and rule files together with their existing `.sippion-backup` siblings. If any
-client update fails, files touched by that setup attempt are restored to those
-pre-attempt snapshots, including removing files that did not exist beforehand.
+and rule files in memory together with their existing permission metadata and
+any legacy `.sippion-backup` siblings. If any client update fails, files touched
+by that setup attempt are restored to those pre-attempt snapshots, including
+removing files that did not exist beforehand and restoring Unix permission bits.
 A rollback failure is reported separately instead of being hidden by the
 original setup error.
 
-Before replacing an individual existing configuration file, Sippion also
-refreshes a sibling `.sippion-backup` copy from the immediate pre-change
-contents. On Windows, where `rename` cannot replace an existing destination
-portably, Sippion first renames the original to a unique rollback path, installs
-the new file, and restores the original if installation fails. If even
-restoration fails, the error reports the rollback path that still contains the
-original bytes.
+Setup no longer creates persistent `.sippion-backup` files because a full copy
+of a client configuration can retain credentials that the user later removes
+from the live file. Legacy backup files left by older Sippion releases are
+removed transactionally during setup and are also cleaned by uninstall. If a
+setup attempt fails after legacy-backup cleanup, the pre-attempt snapshots
+restore those older backup files as part of the same rollback boundary.
+
+On Unix, MCP client configuration files are created with owner-only `0600`
+permissions and existing files are repaired to `0600` even when their contents
+are already current. Rule files preserve their previous mode. Replacement temp
+files use exclusive creation and are written with a private mode before atomic
+rename. On Windows, a staged replacement is written into an existing managed
+file in place so its existing ACL and file identity are preserved; a failed
+write immediately restores the original bytes.
 
 The release installers apply the same transaction boundary to the installed
 binary. They save the previous Sippion executable before replacement and restore
@@ -66,6 +104,8 @@ successfully. PATH mutation on Windows occurs only after setup succeeds.
 `sippion doctor` returns a non-zero process status whenever any expected MCP
 configuration or global rule is missing, mismatched, malformed, or unreadable,
 so scripts and CI can use it as an actual health check rather than parsing text.
+Legacy registrations using `--root .` are reported as mismatched so a subsequent
+`setup` migrates them to the guarded `--root-auto` form.
 
 ## Release and dependency supply chain
 
