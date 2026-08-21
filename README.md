@@ -52,10 +52,11 @@ release signer workflow, and the exact commit SHA resolved from the selected
 release tag.
 
 Sippion pre-registers **all three clients**, even if one is not installed yet.
-Each client launches Sippion with `--root-auto`. Sippion resolves an enclosing
-Git repository first, then a nearby project manifest, and refuses automatic
-selection of the user's home directory or filesystem root. You do not need to
-register Sippion separately for every repository.
+Each client launches Sippion with `--root-auto`. Sippion selects the nearest
+recognized Git/project boundary and refuses automatic selection of the user's
+home directory or filesystem root. On Unix, shared group/other-writable
+ancestor directories are not trusted as automatic boundaries. You do not need
+to register Sippion separately for every repository.
 
 A checksum-only direct installer mode remains available as an explicit opt-out
 for controlled environments where provenance was verified by another trusted
@@ -149,6 +150,10 @@ To infer a safe project root from the current directory:
 ```sh
 sippion mcp --root-auto
 ```
+
+Automatic discovery uses the nearest recognized Git/project marker. It does not
+continue past a nearer project manifest merely to find a farther `.git` marker;
+on Unix it also stops before trusting a group/other-writable shared directory.
 
 To bind Sippion explicitly to one project root:
 
