@@ -49,11 +49,24 @@ marker or a supported project manifest such as `Cargo.toml`, `package.json`,
 manifest merely to prefer a farther ancestor `.git` marker. Marker symlinks are
 not accepted.
 
+Home-directory resolution is itself part of the root security boundary. If the
+current user's home cannot be determined and canonicalized, guarded automatic
+root selection fails closed rather than continuing with the home/ancestor check
+disabled. Explicit `--root` uses the same fail-closed rule unless the user has
+also supplied the deliberate `--allow-broad-root` override.
+
 On Unix, automatic discovery also stops before trusting a directory writable by
 group or other users. This prevents an attacker from widening a marker-less
 project into a shared ancestor by placing a forged boundary marker such as
 `/tmp/.git`. An intentionally selected shared project can still be supplied as
 an explicit root subject to the explicit-root guards.
+
+On Windows, Sippion keeps `unsafe` code forbidden and the stable safe Rust
+filesystem surface does not expose sufficient DACL writeability information to
+prove that an arbitrary ancestor is not shared-writable. Instead of silently
+accepting that uncertainty, `--root-auto` is constrained to the canonical
+current-user profile subtree. A trusted project outside that subtree remains
+available through intentional explicit `sippion mcp --root <path>` selection.
 
 Automatic discovery fails closed when it cannot identify a project or when the
 candidate is the user's home directory, an ancestor of that home directory, or
@@ -73,6 +86,12 @@ duplicate markers, or reversed markers cause the operation to fail closed
 without modifying that file. Managed files that are themselves symlinks are
 also refused rather than followed or replaced.
 
+Before setup, doctor, or uninstall mutates/accepts managed configuration,
+Sippion also checks the managed parent directories (`~/.codex`, `~/.claude`,
+`~/.gemini`, and `~/.gemini/config`). A parent that is a symlink or a
+non-directory is refused. This prevents a harmless-looking leaf filename from
+silently redirecting configuration mutation through a symlinked parent tree.
+
 Before a setup attempt, Sippion snapshots all six managed client configuration
 and rule files in memory together with their existing permission metadata and
 any legacy `.sippion-backup` siblings. If any client update fails, files touched
@@ -80,6 +99,12 @@ by that setup attempt are restored to those pre-attempt snapshots, including
 removing files that did not exist beforehand and restoring Unix permission bits.
 A rollback failure is reported separately instead of being hidden by the
 original setup error.
+
+Uninstall now uses the same transaction boundary. It snapshots the six managed
+files plus legacy backup siblings before removal. If any removal fails after an
+earlier target was already changed, Sippion restores the complete pre-attempt
+snapshot rather than leaving a partially uninstalled client configuration.
+Rollback failures are again reported separately.
 
 Setup no longer creates persistent `.sippion-backup` files because a full copy
 of a client configuration can retain credentials that the user later removes
@@ -94,7 +119,9 @@ are already current. Rule files preserve their previous mode. Replacement temp
 files use exclusive creation and are written with a private mode before atomic
 rename. On Windows, a staged replacement is written into an existing managed
 file in place so its existing ACL and file identity are preserved; a failed
-write immediately restores the original bytes.
+write immediately restores the original bytes. Transactional uninstall rollback
+uses the same in-place principle for existing Windows files so their ACL/file
+identity is not replaced merely to restore content.
 
 The release installers apply the same transaction boundary to the installed
 binary. They save the previous Sippion executable before replacement and restore
@@ -102,10 +129,31 @@ it, or remove a newly introduced executable, if `sippion setup` does not finish
 successfully. PATH mutation on Windows occurs only after setup succeeds.
 
 `sippion doctor` returns a non-zero process status whenever any expected MCP
-configuration or global rule is missing, mismatched, malformed, or unreadable,
-so scripts and CI can use it as an actual health check rather than parsing text.
-Legacy registrations using `--root .` are reported as mismatched so a subsequent
-`setup` migrates them to the guarded `--root-auto` form.
+configuration or global rule is missing, mismatched, malformed, unreadable, or
+is located through a refused managed-parent symlink, so scripts and CI can use it
+as an actual health check rather than parsing text. Legacy registrations using
+`--root .` are reported as mismatched so a subsequent `setup` migrates them to
+the guarded `--root-auto` form.
+
+## Retrieval matching and completeness
+
+Retrieval query terms, RAM-index terms, path ranking, excerpt matching, and
+structural graph names use Unicode-aware lowercasing rather than ASCII-only
+lowercasing. When Unicode lowercasing changes UTF-8 encoded length, excerpt
+matching maps the folded match back to the original source byte position before
+building a model-visible range; folded byte offsets are never reused directly
+against the original string.
+
+Filesystem safety policy remains intentionally separate: denied/pruned path
+matching continues to use ASCII case folding so this retrieval-quality change
+does not broaden or reinterpret the security policy.
+
+Ignore controls affect whether Sippion can claim a complete repository-wide
+`NO_MATCH`. Empty, whitespace-only, and comment-only `.gitignore` / `.ignore`
+files cannot hide content and therefore no longer degrade that status. Files
+with an effective rule still contribute a conservative exclusion sentinel.
+Unreadable, non-UTF-8, or unusually large ignore controls are also treated
+conservatively as potentially effective rather than being trusted as empty.
 
 ## Release and dependency supply chain
 
