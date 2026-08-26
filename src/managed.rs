@@ -2,12 +2,15 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(not(windows))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(windows))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(windows))]
 static RESTORE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -263,13 +266,13 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 fn validate_managed_parent_boundaries(home: &Path) -> Result<(), String> {
-    for relative in [
-        Path::new(".codex"),
-        Path::new(".claude"),
-        Path::new(".gemini"),
-        Path::new(".gemini").join("config").as_path(),
-    ] {
-        let path = home.join(relative);
+    let parents = [
+        home.join(".codex"),
+        home.join(".claude"),
+        home.join(".gemini"),
+        home.join(".gemini").join("config"),
+    ];
+    for path in parents {
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(format!(
