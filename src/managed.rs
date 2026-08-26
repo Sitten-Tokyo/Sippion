@@ -95,7 +95,9 @@ fn snapshot_path(path: PathBuf) -> Result<Snapshot, String> {
     match fs::read(&path) {
         Ok(contents) => {
             let permissions = fs::metadata(&path)
-                .map_err(|error| format!("cannot stat {} before uninstall: {error}", path.display()))?
+                .map_err(|error| {
+                    format!("cannot stat {} before uninstall: {error}", path.display())
+                })?
                 .permissions();
             Ok(Snapshot {
                 path,
@@ -119,11 +121,9 @@ fn restore_snapshots(snapshots: &[Snapshot]) -> Vec<String> {
     let mut failures = Vec::new();
     for snapshot in snapshots.iter().rev() {
         let result = match &snapshot.contents {
-            Some(contents) => restore_bytes(
-                &snapshot.path,
-                contents,
-                snapshot.permissions.as_ref(),
-            ),
+            Some(contents) => {
+                restore_bytes(&snapshot.path, contents, snapshot.permissions.as_ref())
+            }
             None => remove_if_regular(&snapshot.path),
         };
         if let Err(error) = result {
@@ -161,8 +161,12 @@ fn restore_bytes(
 ) -> Result<(), String> {
     reject_symlink_file(path)?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create {} during rollback: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "cannot create {} during rollback: {error}",
+                parent.display()
+            )
+        })?;
     }
 
     let existed = fs::symlink_metadata(path).is_ok();
@@ -195,8 +199,12 @@ fn restore_bytes(
 ) -> Result<(), String> {
     reject_symlink_file(path)?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create {} during rollback: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "cannot create {} during rollback: {error}",
+                parent.display()
+            )
+        })?;
     }
 
     let temporary = write_temporary(path, contents)?;
@@ -289,7 +297,10 @@ fn validate_managed_parent_boundaries(home: &Path) -> Result<(), String> {
             Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!("cannot inspect managed parent {}: {error}", path.display()));
+                return Err(format!(
+                    "cannot inspect managed parent {}: {error}",
+                    path.display()
+                ));
             }
         }
     }
