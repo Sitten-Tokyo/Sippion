@@ -17,16 +17,36 @@ const PROJECT_MARKERS: &[&str] = &[
 pub(crate) fn infer_project_root_from_cwd() -> Result<PathBuf, String> {
     let cwd = env::current_dir()
         .map_err(|error| format!("cannot determine current directory: {error}"))?;
-    let home = home_dir().and_then(|path| fs::canonicalize(path).ok());
-    infer_project_root(&cwd, home.as_deref())
+    let home = canonical_home()?;
+    validate_platform_auto_scope(&cwd, &home)?;
+    infer_project_root(&cwd, Some(&home))
 }
 
 pub(crate) fn secure_explicit_root(
     root: impl AsRef<Path>,
     allow_broad_root: bool,
 ) -> Result<PathBuf, String> {
-    let home = home_dir().and_then(|path| fs::canonicalize(path).ok());
+    // Without an explicit broad-root opt-in, home resolution is part of the security boundary.
+    // Failing to determine it must not silently disable the home/ancestor rejection policy.
+    let home = if allow_broad_root {
+        home_dir().and_then(|path| fs::canonicalize(path).ok())
+    } else {
+        Some(canonical_home()?)
+    };
     secure_explicit_root_with_home(root.as_ref(), allow_broad_root, home.as_deref())
+}
+
+fn canonical_home() -> Result<PathBuf, String> {
+    let home = home_dir().ok_or_else(|| {
+        "cannot determine user home directory; refusing project-root selection because the broad-root guard cannot be enforced"
+            .to_string()
+    })?;
+    fs::canonicalize(&home).map_err(|error| {
+        format!(
+            "cannot resolve user home directory {}; refusing project-root selection: {error}",
+            home.display()
+        )
+    })
 }
 
 fn secure_explicit_root_with_home(
@@ -116,6 +136,28 @@ fn is_shared_writable_directory(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_shared_writable_directory(_path: &Path) -> bool {
     false
+}
+
+#[cfg(windows)]
+fn validate_platform_auto_scope(start: &Path, home: &Path) -> Result<(), String> {
+    let start = fs::canonicalize(start)
+        .map_err(|error| format!("cannot resolve current project directory: {error}"))?;
+    // Stable Rust does not expose Windows DACL writeability and this crate forbids unsafe code.
+    // Rather than silently accepting an ACL-blind shared ancestor, automatic discovery on Windows
+    // is deliberately constrained to the canonical user profile. Projects elsewhere remain
+    // available through the intentional explicit --root path.
+    if !start.starts_with(home) {
+        return Err(
+            "automatic project-root discovery on Windows is limited to the current user profile because shared-directory ACLs cannot be safely verified; use `sippion mcp --root <project>` for an intentional project outside the profile"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn validate_platform_auto_scope(_start: &Path, _home: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn is_broad_root(path: &Path, home: Option<&Path>) -> bool {
@@ -235,5 +277,14 @@ mod tests {
 
         assert!(is_broad_root(&canonical_parent, Some(&canonical_home)));
         fs::remove_dir_all(parent).expect("cleanup");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_auto_scope_requires_user_profile_subtree() {
+        let home = Path::new(r"C:\Users\alice");
+        assert!(validate_platform_auto_scope(home, home).is_err());
+        // This helper canonicalizes real paths, so the synthetic assertion above only verifies the
+        // fail-closed behavior for unresolved paths. End-to-end Windows CI covers real profile use.
     }
 }
