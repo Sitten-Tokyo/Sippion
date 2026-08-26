@@ -101,7 +101,11 @@ fn effective_gitignore_still_prevents_absolute_no_match() {
     let root = temp_root("effective");
     std::fs::write(root.join(".gitignore"), "hidden.rs\n").expect("effective ignore file");
     std::fs::write(root.join("source.rs"), "fn ordinary_marker() {}\n").expect("source");
-    std::fs::write(root.join("hidden.rs"), "fn definitely_missing_marker() {}\n").expect("hidden");
+    std::fs::write(
+        root.join("hidden.rs"),
+        "fn definitely_missing_marker() {}\n",
+    )
+    .expect("hidden");
 
     let text = query_missing_marker(&root);
     assert!(!text.contains("policy_excluded=0"));
