@@ -55,8 +55,12 @@ Sippion pre-registers **all three clients**, even if one is not installed yet.
 Each client launches Sippion with `--root-auto`. Sippion selects the nearest
 recognized Git/project boundary and refuses automatic selection of the user's
 home directory or filesystem root. On Unix, shared group/other-writable
-ancestor directories are not trusted as automatic boundaries. You do not need
-to register Sippion separately for every repository.
+ancestor directories are not trusted as automatic boundaries. On Windows,
+`--root-auto` is deliberately limited to projects under the canonical current
+user profile because Sippion cannot safely verify arbitrary shared-directory
+ACLs through stable safe Rust APIs; trusted projects elsewhere can use an
+explicit `--root`. You do not need to register Sippion separately for every
+repository under the normal automatic scope.
 
 A checksum-only direct installer mode remains available as an explicit opt-out
 for controlled environments where provenance was verified by another trusted
@@ -132,14 +136,18 @@ sippion uninstall
 `setup` is idempotent and transactional across the managed client files. It
 refuses to rewrite a Sippion-managed text block if its management markers are
 missing, duplicated, or out of order, rather than risking unrelated user
-settings. Managed configuration-file symlinks are refused. On Unix, MCP client
-configuration files are created or repaired as owner-only `0600`; rollback also
-restores the previous permission bits. Persistent `.sippion-backup` copies are
-not created, and legacy copies from older releases are removed transactionally.
-If any client update fails, files touched by that setup attempt are restored.
+settings. Managed files and their managed parent directories are refused when
+they are symlinks. On Unix, MCP client configuration files are created or
+repaired as owner-only `0600`; rollback also restores the previous permission
+bits. Persistent `.sippion-backup` copies are not created, and legacy copies
+from older releases are removed transactionally. If any client update fails,
+files touched by that setup attempt are restored.
+
 `doctor` checks registration health and exits non-zero when any expected
-registration is unhealthy. `uninstall` removes Sippion-managed client
-configuration and rules but does not remove unrelated settings.
+registration is unhealthy. `uninstall` is transactional too: it snapshots the
+managed configuration/rule files before removal and restores the pre-attempt
+state if any removal fails. It removes Sippion-managed client configuration and
+rules but does not remove unrelated settings or the binary.
 
 See [Client setup](docs/clients.md) for manual configuration and diagnostics.
 
@@ -154,8 +162,12 @@ sippion mcp --root-auto
 Automatic discovery uses the nearest recognized Git/project marker. It does not
 continue past a nearer project manifest merely to find a farther `.git` marker;
 on Unix it also stops before trusting a group/other-writable shared directory.
+Resolving the current user's home directory is part of the safety check, so
+failure to resolve it stops automatic discovery instead of silently disabling
+the home/ancestor guard.
 
-To bind Sippion explicitly to one project root:
+On Windows, `--root-auto` is limited to projects under the canonical current
+user profile. To use a trusted project elsewhere, bind it explicitly:
 
 ```sh
 sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT
@@ -175,7 +187,8 @@ sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT --scan-budget-mib 128
 
 Retrieval starts with a RAM-only lexical index, parses only ranked candidates,
 adds bounded source-only semantic evidence, and packs verified excerpts into a
-bounded response.
+bounded response. Search-term matching is Unicode-aware while filesystem safety
+policy remains deliberately separate and conservative.
 
 Sippion is a repository-context tool, not a compiler or language server. It
 does not claim compiler-authoritative type resolution or LSP-grade references.
