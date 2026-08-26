@@ -2,6 +2,7 @@
 
 mod core;
 mod hybrid;
+mod managed;
 mod mcp;
 mod repo;
 mod root;
@@ -51,19 +52,19 @@ fn run() -> Result<(), String> {
             if args.next().is_some() {
                 return Err("setup does not accept arguments".to_string());
             }
-            return setup::run_setup();
+            return managed::run_setup();
         }
         Some("doctor") => {
             if args.next().is_some() {
                 return Err("doctor does not accept arguments".to_string());
             }
-            return setup::run_doctor();
+            return managed::run_doctor();
         }
         Some("uninstall") => {
             if args.next().is_some() {
                 return Err("uninstall does not accept arguments".to_string());
             }
-            return setup::run_uninstall();
+            return managed::run_uninstall();
         }
         Some("mcp") => {}
         _ => {
