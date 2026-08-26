@@ -39,8 +39,8 @@ pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome
     let top = outcome.hits.iter().take(3).collect::<Vec<_>>();
     let mut covered = HashSet::<&str>::new();
     for hit in &top {
-        let path = hit.relative_path.to_ascii_lowercase();
-        let excerpt = hit.excerpt.to_ascii_lowercase();
+        let path = crate::core::unicode_search_fold(&hit.relative_path);
+        let excerpt = crate::core::unicode_search_fold(&hit.excerpt);
         for term in &query.terms {
             if path.contains(term.as_str()) || excerpt.contains(term.as_str()) {
                 covered.insert(term.as_str());
@@ -76,9 +76,10 @@ pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome
 
 pub(super) fn stable_term_hash(text: &str) -> u64 {
     // Stable FNV-1a keeps the RAM index compact and avoids retaining repository tokens verbatim.
+    let folded = crate::core::unicode_search_fold(text);
     let mut hash = 0xcbf29ce484222325u64;
-    for byte in text.as_bytes() {
-        hash ^= u64::from(byte.to_ascii_lowercase());
+    for byte in folded.as_bytes() {
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
@@ -99,22 +100,21 @@ pub(super) fn identifier_fragments(identifier: &str) -> Vec<String> {
             let previous = chars[index - 1];
             let current = chars[index];
             let next = chars.get(index + 1).copied();
-            let camel_boundary = current.is_ascii_uppercase()
-                && (previous.is_ascii_lowercase()
+            let camel_boundary = current.is_uppercase()
+                && (previous.is_lowercase()
                     || previous.is_ascii_digit()
-                    || (previous.is_ascii_uppercase()
-                        && next.is_some_and(|value| value.is_ascii_lowercase())));
+                    || (previous.is_uppercase() && next.is_some_and(char::is_lowercase)));
             if camel_boundary {
                 let fragment = chars[start..index].iter().collect::<String>();
                 if fragment.len() >= 2 {
-                    fragments.push(fragment.to_ascii_lowercase());
+                    fragments.push(crate::core::unicode_search_fold(&fragment));
                 }
                 start = index;
             }
         }
         let fragment = chars[start..].iter().collect::<String>();
         if fragment.len() >= 2 {
-            fragments.push(fragment.to_ascii_lowercase());
+            fragments.push(crate::core::unicode_search_fold(&fragment));
         }
     }
     fragments
@@ -146,8 +146,7 @@ pub(super) fn query_substring_grams(term: &str) -> Vec<u32> {
         if term.len() < 2 {
             return Vec::new();
         }
-        let lower = term.to_ascii_lowercase();
-        let bytes = lower.as_bytes();
+        let bytes = term.as_bytes();
         let width = if bytes.len() == 2 { 2 } else { 3 };
         let mut grams = bytes
             .windows(width)
@@ -158,9 +157,9 @@ pub(super) fn query_substring_grams(term: &str) -> Vec<u32> {
         return grams;
     }
 
-    // Query normalization folds ASCII case only, so non-ASCII scalar values remain exact here too.
-    // Requiring every scalar preserves candidate recall for Unicode substrings; source verification
-    // still removes hash/order false positives before any evidence becomes model-visible.
+    // Query normalization already applies Unicode-aware lowercase. Requiring every folded scalar
+    // preserves candidate recall for Unicode substrings; exact source verification still removes
+    // hash/order false positives before any evidence becomes model-visible.
     let mut grams = term
         .chars()
         .map(unicode_scalar_gram_key)
@@ -199,7 +198,7 @@ pub(super) fn build_indexed_document(text: &str, stamp: Option<SourceStamp>) -> 
         .filter(|part| part.len() >= 2)
     {
         document_len = document_len.saturating_add(1);
-        let lower = part.to_ascii_lowercase();
+        let lower = crate::core::unicode_search_fold(part);
         add_index_term(&mut counts, &lower, &mut term_truncated);
         for fragment in identifier_fragments(part) {
             add_index_term(&mut counts, &fragment, &mut term_truncated);
@@ -338,10 +337,10 @@ pub(super) fn search_timed_out(started: &Instant) -> bool {
     started.elapsed() >= MAX_SEARCH_WALL_TIME
 }
 
-pub(super) fn first_term_match_byte(lower_line: &str, terms: &[String]) -> Option<usize> {
+pub(super) fn first_term_match_byte(line: &str, terms: &[String]) -> Option<usize> {
     terms
         .iter()
-        .filter_map(|term| lower_line.find(term.as_str()))
+        .filter_map(|term| crate::core::unicode_search_fold_find_byte(line, term))
         .min()
 }
 
@@ -454,7 +453,7 @@ pub(super) fn sort_hits(hits: &mut [SearchHit]) {
 }
 
 pub(super) fn path_match_score(path: &str, terms: &[String]) -> usize {
-    let path_lower = path.to_ascii_lowercase();
+    let path_lower = crate::core::unicode_search_fold(path);
     terms
         .iter()
         .filter(|term| path_lower.contains(term.as_str()))
@@ -485,6 +484,7 @@ pub(super) fn path_parts(path: &Path) -> Option<Vec<String>> {
     let mut parts = Vec::new();
     for component in path.components() {
         if let Component::Normal(part) = component {
+            // This feeds filesystem safety policy, which is intentionally ASCII case-insensitive.
             parts.push(part.to_str()?.to_ascii_lowercase());
         }
     }
