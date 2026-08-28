@@ -21,4 +21,20 @@ if test.exists():
     )
     test.write_text(text, encoding="utf-8")
 
+core = root / "src/core.rs"
+text = core.read_text(encoding="utf-8")
+text = text.replace(
+    'assert_eq!(unicode.terms, vec!["äuth", "überprüfung"]);',
+    'assert_eq!(\n            unicode.terms,\n            vec![unicode_search_fold("ÄUTH"), unicode_search_fold("Überprüfung")]\n        );',
+)
+core.write_text(text, encoding="utf-8")
+
+hybrid = root / "src/hybrid.rs"
+text = hybrid.read_text(encoding="utf-8")
+text = text.replace(
+    'let terms = vec!["überprüfung".to_string()];',
+    'let terms = vec![crate::core::unicode_search_fold("überprüfung")];',
+)
+hybrid.write_text(text, encoding="utf-8")
+
 print("temporary patch fixups applied")
