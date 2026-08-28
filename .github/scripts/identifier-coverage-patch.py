@@ -25,6 +25,19 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     if !terms.iter().any(|term| lower.contains(term)) {
         return 0.0;
     }
+
+    // Rust restricted visibility (`pub(super)`, `pub(crate)`, `pub(in path)`) describes the
+    // ownership boundary, not a different declaration kind. Strip that prefix only for
+    // declaration detection so the same scoring works for ordinary and restricted definitions.
+    let definition_source = if lower.starts_with("pub(") {
+        lower
+            .find(") ")
+            .map(|end| lower[end + 2..].trim_start())
+            .unwrap_or(lower.as_str())
+    } else {
+        lower.as_str()
+    };
+
     let definition_markers = [
         "pub async fn ",
         "pub fn ",
@@ -58,9 +71,9 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     ];
     if let Some(marker) = definition_markers
         .iter()
-        .find(|marker| lower.starts_with(**marker))
+        .find(|marker| definition_source.starts_with(**marker))
     {
-        let rest = lower[marker.len()..].trim_start();
+        let rest = definition_source[marker.len()..].trim_start();
         let end = rest
             .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
             .unwrap_or(rest.len());
@@ -105,7 +118,7 @@ path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
 
 text = path.read_text(encoding='utf-8')
 needle = '''    #[test]\n    fn bm25_prefers_repeated_rare_term() {'''
-insert = '''    #[test]\n    fn natural_query_rewards_partial_identifier_ownership_and_references() {\n        let terms = vec![\n            "source".to_string(),\n            "fingerprint".to_string(),\n            "stale".to_string(),\n            "evidence".to_string(),\n        ];\n        let definition = structural_line_bonus(\n            "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",\n            &terms,\n        );\n        let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);\n        let prose = structural_line_bonus("source fingerprint stale evidence", &terms);\n        assert!(definition > reference);\n        assert!(reference > prose);\n    }\n\n    #[test]\n    fn bm25_prefers_repeated_rare_term() {'''
+insert = '''    #[test]\n    fn natural_query_rewards_partial_identifier_ownership_and_references() {\n        let terms = vec![\n            "source".to_string(),\n            "fingerprint".to_string(),\n            "stale".to_string(),\n            "evidence".to_string(),\n        ];\n        let definition = structural_line_bonus(\n            "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",\n            &terms,\n        );\n        let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);\n        let prose = structural_line_bonus("source fingerprint stale evidence", &terms);\n        assert!(definition > reference);\n        assert!(reference > prose);\n    }\n\n    #[test]\n    fn restricted_rust_visibility_is_treated_as_definition_ownership() {\n        let terms = vec!["project".to_string(), "markers".to_string()];\n        assert!(\n            structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)\n                > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)\n        );\n    }\n\n    #[test]\n    fn bm25_prefers_repeated_rare_term() {'''
 if text.count(needle) != 1:
     raise SystemExit('test insertion marker mismatch')
 path.write_text(text.replace(needle, insert, 1), encoding='utf-8')
