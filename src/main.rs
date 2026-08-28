@@ -11,6 +11,7 @@ mod setup;
 mod syntax;
 
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,9 +67,13 @@ fn run() -> Result<(), String> {
             managed::run_uninstall()
         }
         Some("inspect") => run_inspect_command(&rest),
+        Some("estimate-tokens") => run_estimate_tokens_command(&rest),
         Some("query") => run_query_command(&rest),
         Some("mcp") => run_mcp_command(&rest),
-        _ => Err("supported commands: mcp, query, inspect, setup, doctor, uninstall".to_string()),
+        _ => Err(
+            "supported commands: mcp, query, estimate-tokens, inspect, setup, doctor, uninstall"
+                .to_string(),
+        ),
     }
 }
 
@@ -111,6 +116,7 @@ fn run_inspect_command(args: &[OsString]) -> Result<(), String> {
             "mcpProtocolVersions": protocols,
             "modelVisibleContextHardBytes": MODEL_VISIBLE_CONTEXT_HARD_BYTES,
             "diagnosticsInRepoContext": false,
+            "tokenEstimator": "heuristic-v3",
             "capabilityRegistry": crate::core::capability_registry(),
         });
         println!(
@@ -130,7 +136,35 @@ fn run_inspect_command(args: &[OsString]) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        println!("token estimator: heuristic-v3");
         println!("diagnostics in repo_context: no (local CLI only)");
+    }
+    Ok(())
+}
+
+fn run_estimate_tokens_command(args: &[OsString]) -> Result<(), String> {
+    let json_output = match args {
+        [] => false,
+        [arg] if arg.to_str() == Some("--json") => true,
+        _ => return Err("estimate-tokens accepts only optional --json".to_string()),
+    };
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(|error| format!("cannot read stdin: {error}"))?;
+    let estimated_tokens = crate::core::heuristic_v3_estimated_tokens(&text);
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "estimator": "heuristic-v3",
+                "utf8Bytes": text.len(),
+                "estimatedTokens": estimated_tokens,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{estimated_tokens}");
     }
     Ok(())
 }
@@ -370,12 +404,16 @@ fn print_help() {
     println!("Usage: sippion mcp --root <project> [--scan-budget-mib 16..512]");
     println!("       sippion mcp --root-auto [--scan-budget-mib 16..512]");
     println!("       sippion query --root <project>|--root-auto [--json] [--explain] -- <q>");
+    println!("       sippion estimate-tokens [--json] < stdin");
     println!("       sippion inspect [--json]");
     println!("       sippion setup");
     println!("       sippion doctor [--json|--verbose]");
     println!("       sippion uninstall");
     println!(
         "  query runs the same bounded retrieval path as repo_context; diagnostics are opt-in."
+    );
+    println!(
+        "  estimate-tokens exposes the exact local soft-budget estimator used by the runtime and evaluation tooling."
     );
     println!("  inspect reports static local capabilities without reading repository source.");
     println!(
