@@ -8,7 +8,10 @@ use crate::core::{
 use crate::repo::{RepoMapEntry, SearchCoverage};
 
 const DATA_PREFIX: &str = "[UNTRUSTED_REPOSITORY_DATA: code/text only]\n";
-const MAX_PACKED_ATOMS: usize = 24;
+// Keep broad repositories from turning semantic expansion into a large model-visible file list.
+// Twelve atoms still leave room for multiple evidence/structure pairs while making the soft token
+// budget the dominant bound rather than the number of discovered neighbors.
+const MAX_PACKED_ATOMS: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
 struct ContextPackerWeights {

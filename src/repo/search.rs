@@ -354,6 +354,7 @@ impl RepositoryAccess {
                 candidate.score =
                     (CONTENT_MATCH_BASE_SCORE + matched * 10 + candidate.path_bonus * 3) as f64
                         + bm25 * 12.0
+                        + coding_source_prior(&candidate.relative_path)
                         + memory_bonus;
             } else {
                 candidate.score = (candidate.path_bonus * 3) as f64 + memory_bonus.min(4.0);
@@ -729,6 +730,7 @@ impl RepositoryAccess {
                     + candidate.path_bonus * 3) as f64
                     + bm25 * 12.0
                     + *structure_bonus
+                    + coding_source_prior(&candidate.relative_path)
                     + memory_bonus,
                 source_stamp: Some(verified.stamp.clone()),
                 source_fingerprint: Some(verified.fingerprint),
@@ -740,6 +742,7 @@ impl RepositoryAccess {
                 excerpt: REDACTED_MATCH_EXCERPT.to_string(),
                 score: (CONTENT_MATCH_BASE_SCORE + matched * 10 + candidate.path_bonus * 3) as f64
                     + bm25 * 12.0
+                    + coding_source_prior(&candidate.relative_path)
                     + memory_bonus,
                 source_stamp: Some(verified.stamp.clone()),
                 source_fingerprint: Some(verified.fingerprint),

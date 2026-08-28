@@ -276,12 +276,12 @@ pub struct ModelVisibleBudget {
 }
 
 pub const MIN_CONTEXT_BUDGET: ModelVisibleBudget = ModelVisibleBudget {
-    target_estimated_tokens: 1_800,
+    target_estimated_tokens: 1_400,
     hard_model_text_bytes: 8 * 1024,
 };
 
 pub const MAX_CONTEXT_BUDGET: ModelVisibleBudget = ModelVisibleBudget {
-    target_estimated_tokens: 7_200,
+    target_estimated_tokens: 2_600,
     hard_model_text_bytes: 32 * 1024,
 };
 
@@ -306,11 +306,11 @@ pub fn adaptive_context_budget(
     match tier {
         0 => MIN_CONTEXT_BUDGET,
         1 => ModelVisibleBudget {
-            target_estimated_tokens: 3_600,
+            target_estimated_tokens: 1_800,
             hard_model_text_bytes: 16 * 1024,
         },
         2 => ModelVisibleBudget {
-            target_estimated_tokens: 5_400,
+            target_estimated_tokens: 2_200,
             hard_model_text_bytes: 24 * 1024,
         },
         _ => MAX_CONTEXT_BUDGET,
@@ -664,6 +664,22 @@ mod tests {
         assert_eq!(
             adaptive_context_budget(0.30, 17, 20, 8).hard_model_text_bytes,
             32 * 1024
+        );
+        assert_eq!(
+            adaptive_context_budget(0.95, 2, 3, 2).target_estimated_tokens,
+            1_400
+        );
+        assert_eq!(
+            adaptive_context_budget(0.80, 6, 8, 3).target_estimated_tokens,
+            1_800
+        );
+        assert_eq!(
+            adaptive_context_budget(0.60, 12, 14, 5).target_estimated_tokens,
+            2_200
+        );
+        assert_eq!(
+            adaptive_context_budget(0.30, 17, 20, 8).target_estimated_tokens,
+            2_600
         );
     }
 
