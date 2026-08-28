@@ -12,6 +12,7 @@ on:
       - completed
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
@@ -35,6 +36,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -92,6 +94,23 @@ jobs:
               and .head.sha == $expected_head_sha
             ' <<<"$pr_json" >/dev/null
 
+          current_base_sha="$(jq -r '.base.sha' <<<"$pr_json")"
+          if [[ ! "$current_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid current PR base SHA" >&2
+            exit 1
+          fi
+          binding_name="ci-binding-${current_base_sha}-${RUN_HEAD_SHA}"
+          artifacts_json="$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100")"
+          jq -e --arg binding_name "$binding_name" '
+            [ .artifacts[]
+              | select(.name == $binding_name and .expired == false)
+            ]
+            | length == 1
+          ' <<<"$artifacts_json" >/dev/null || {
+            echo "Successful CI was not bound to current base/head pair: $binding_name" >&2
+            exit 1
+          }
+
           echo "number=$pr_number" >> "$GITHUB_OUTPUT"
 
       - name: Squash merge exact CI-verified head
@@ -99,7 +118,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }} # exact merge head
         shell: bash
         run: |
           set -euo pipefail
