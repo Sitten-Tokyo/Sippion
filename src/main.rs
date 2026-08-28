@@ -287,21 +287,24 @@ fn query_diagnostic(context: &str) -> QueryDiagnostic {
     let mut target_estimated_tokens = None;
     let mut scanned_bytes = None;
     for line in context.lines() {
-        if line.starts_with("PACK ") {
-            hard_budget_bytes = parse_numeric_field(line, "hard_bytes=");
-            target_estimated_tokens = parse_numeric_field(line, "target_estimated_tokens=");
-        } else if line.starts_with("COVERAGE ") {
-            scanned_bytes = parse_numeric_field(line, "scanned_bytes=");
-        } else if let Some(rest) = line.strip_prefix("FILE path=") {
-            if let Some((path_json, rest)) = rest.split_once(" rank=") {
-                if let (Ok(path), Some(rank_text)) = (
-                    serde_json::from_str::<String>(path_json),
-                    rest.split_whitespace().next(),
-                ) {
-                    if let Ok(rank) = rank_text.parse::<f64>() {
-                        ranked_files.push(RankedFileDiagnostic { path, rank });
-                    }
-                }
+        if line.starts_with("CTX ") {
+            hard_budget_bytes = parse_numeric_field(line, "hard_b=");
+            target_estimated_tokens = parse_numeric_field(line, "target_t=");
+            scanned_bytes = parse_numeric_field(line, "scan_b=");
+        } else if let Some(rest) = line.strip_prefix("S path=") {
+            let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+            let Some(Ok(path)) = stream.next() else {
+                continue;
+            };
+            let metadata = rest[stream.byte_offset()..].trim_start();
+            let Some(rank_text) = metadata
+                .strip_prefix("rank=")
+                .and_then(|value| value.split_whitespace().next())
+            else {
+                continue;
+            };
+            if let Ok(rank) = rank_text.parse::<f64>() {
+                ranked_files.push(RankedFileDiagnostic { path, rank });
             }
         }
     }
@@ -314,7 +317,6 @@ fn query_diagnostic(context: &str) -> QueryDiagnostic {
         ranked_files,
     }
 }
-
 fn run_query_command(args: &[OsString]) -> Result<(), String> {
     let mut options = RepositoryOptions::default();
     let mut json_output = false;

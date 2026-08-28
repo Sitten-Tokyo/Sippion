@@ -143,10 +143,12 @@ pub(super) fn pack_context(
         || coverage.indexed_files < coverage.eligible_files
         || !status.is_empty();
     let header = format!(
-        "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={}\n",
+        "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={} hard_b={} scan_b={}\n",
         usize::from(incomplete),
         coverage.policy_excluded_files,
         budget.target_estimated_tokens,
+        budget.hard_model_text_bytes,
+        coverage.scanned_bytes,
     );
     let suffix = if status.is_empty() {
         String::new()
