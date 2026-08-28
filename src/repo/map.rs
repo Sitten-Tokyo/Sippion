@@ -22,7 +22,10 @@ fn normalized_module_name(value: &str) -> String {
             .to_string();
     }
     for prefix in ["crate/", "self/", "super/"] {
-        normalized = normalized.strip_prefix(prefix).unwrap_or(&normalized).to_string();
+        normalized = normalized
+            .strip_prefix(prefix)
+            .unwrap_or(&normalized)
+            .to_string();
     }
     normalized.trim_matches('/').to_string()
 }
@@ -287,7 +290,8 @@ impl RepositoryAccess {
         // imported/module neighbor that did not itself contain the query terms. Expanded files are
         // structural evidence only; they do not manufacture a source excerpt or bypass verification.
         if structural_collection_enabled && !search_timed_out(started) {
-            let expansion_paths = self.semantic_expansion_paths(&candidates, MAX_SEMANTIC_EXPANSION_FILES)?;
+            let expansion_paths =
+                self.semantic_expansion_paths(&candidates, MAX_SEMANTIC_EXPANSION_FILES)?;
             for (path, expansion_score) in expansion_paths {
                 if is_cancelled(cancellation) {
                     return Err(RepositoryAccessError::Cancelled);
@@ -669,7 +673,9 @@ impl RepositoryAccess {
             }
             let module = normalized_path_module(path);
             if !module.is_empty() {
-                by_module.entry(module.clone()).or_insert_with(|| path.clone());
+                by_module
+                    .entry(module.clone())
+                    .or_insert_with(|| path.clone());
             }
             if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
                 let stem = crate::core::unicode_search_fold(stem);
@@ -757,7 +763,12 @@ mod optimized_tests {
         .expect("query");
         let search = repository.search(&query, 8, None).expect("search");
         assert!(search.hits.iter().any(|hit| hit.relative_path == "main.rs"));
-        assert!(!search.hits.iter().any(|hit| hit.relative_path == "dependency.rs"));
+        assert!(
+            !search
+                .hits
+                .iter()
+                .any(|hit| hit.relative_path == "dependency.rs")
+        );
         let mapped = repository
             .map_from_hits(&query, &search.hits, 8, None)
             .expect("map");

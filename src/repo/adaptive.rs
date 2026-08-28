@@ -92,9 +92,8 @@ impl RepositoryAccess {
             let round_mib = (round_allowance.max(1) as f64) / (1024.0 * 1024.0);
             let new_hits_per_mib = new_hits as f64 / round_mib.max(1.0);
             let confidence_gain = (confidence - previous_confidence).max(0.0);
-            let marginal_stalled = rounds >= 2
-                && new_hits == 0
-                && confidence_gain < MIN_CONFIDENCE_GAIN_FOR_EXPANSION;
+            let marginal_stalled =
+                rounds >= 2 && new_hits == 0 && confidence_gain < MIN_CONFIDENCE_GAIN_FOR_EXPANSION;
             let marginal_too_small = rounds >= 3
                 && new_hits_per_mib < MIN_NEW_HITS_PER_MIB
                 && confidence_gain < MIN_CONFIDENCE_GAIN_FOR_EXPANSION * 1.5;

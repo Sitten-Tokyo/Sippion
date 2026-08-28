@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use crate::core::{CoordinationContext, NormalizedQuery};
+use crate::repo::RepositoryAccessError;
 pub use crate::repo::{MAX_CONFIGURED_SCAN_BYTES, MAX_SCAN_BYTES, MIN_CONFIGURED_SCAN_BYTES};
-use crate::repo::{RepositoryAccessError};
 
 mod context;
 mod engine;

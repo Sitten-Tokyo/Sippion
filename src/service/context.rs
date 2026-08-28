@@ -137,7 +137,8 @@ pub(super) fn pack_context(
     coverage: &SearchCoverage,
 ) -> String {
     let confidence = f64::from(coverage.confidence_milli) / 1000.0;
-    let budget = adaptive_context_budget(confidence, excerpts.len(), entries.len(), query.terms.len());
+    let budget =
+        adaptive_context_budget(confidence, excerpts.len(), entries.len(), query.terms.len());
     let incomplete = !coverage.discovery_complete
         || coverage.indexed_files < coverage.eligible_files
         || !status.is_empty();
@@ -177,7 +178,9 @@ pub(super) fn pack_context(
         .iter()
         .enumerate()
         .filter(|(_, atom)| atom.kind == ContextAtomKind::Evidence)
-        .filter(|(_, atom)| atom.token_cost <= remaining_tokens && atom.text.len() <= remaining_bytes)
+        .filter(|(_, atom)| {
+            atom.token_cost <= remaining_tokens && atom.text.len() <= remaining_bytes
+        })
         .max_by(|(_, left), (_, right)| {
             left.utility
                 .partial_cmp(&right.utility)
