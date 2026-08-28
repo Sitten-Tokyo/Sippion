@@ -129,13 +129,17 @@ pub(super) fn substring_gram_key(window: &[u8]) -> u32 {
     key
 }
 
-pub(super) fn unicode_scalar_gram_key(ch: char) -> u32 {
+pub(super) fn unicode_sequence_gram_key(window: &[char]) -> u32 {
     // ASCII substring keys use top-byte namespaces 2 and 3. Reserve the high bit for Unicode
-    // scalar sketches so the key families cannot collide structurally.
-    let mut hash = 0x811c9dc5u32;
-    let mut encoded = [0u8; 4];
-    for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-        hash ^= u32::from(*byte);
+    // sequence sketches and include both sequence length and scalar order in the hash.
+    let mut hash = 0x811c9dc5u32 ^ window.len() as u32;
+    for ch in window {
+        let mut encoded = [0u8; 4];
+        for byte in ch.encode_utf8(&mut encoded).as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        hash ^= 0xff;
         hash = hash.wrapping_mul(0x01000193);
     }
     0x8000_0000 | (hash & 0x7fff_ffff)
@@ -157,12 +161,17 @@ pub(super) fn query_substring_grams(term: &str) -> Vec<u32> {
         return grams;
     }
 
-    // Query normalization already applies Unicode-aware lowercase. Requiring every folded scalar
-    // preserves candidate recall for Unicode substrings; exact source verification still removes
-    // hash/order false positives before any evidence becomes model-visible.
-    let mut grams = term
-        .chars()
-        .map(unicode_scalar_gram_key)
+    // Full Unicode folding happens before this stage. Use the longest available one/two/three
+    // scalar window so a candidate must preserve local order and adjacency rather than merely
+    // contain the same set of scalars. Exact source verification remains authoritative.
+    let chars = term.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    let width = chars.len().min(3);
+    let mut grams = chars
+        .windows(width)
+        .map(unicode_sequence_gram_key)
         .collect::<Vec<_>>();
     grams.sort_unstable();
     grams.dedup();
@@ -205,8 +214,8 @@ pub(super) fn build_indexed_document(text: &str, stamp: Option<SourceStamp>) -> 
         }
 
         // Candidate sketches never retain source bodies or plaintext tokens. ASCII keeps compact
-        // two/three-byte grams. Tokens containing Unicode additionally get hashed scalar sketches,
-        // so queries such as "認証" can nominate "ユーザー認証処理" for exact source verification.
+        // two/three-byte grams. Tokens containing Unicode additionally get ordered one/two/three
+        // scalar sequence sketches, so substring recall is retained without discarding adjacency.
         // ASCII runs inside mixed identifiers also keep ordinary substring recall.
         for ascii_run in lower.split(|ch: char| !ch.is_ascii()) {
             let bytes = ascii_run.as_bytes();
@@ -224,12 +233,18 @@ pub(super) fn build_indexed_document(text: &str, stamp: Option<SourceStamp>) -> 
             }
         }
         if !lower.is_ascii() {
-            for ch in lower.chars() {
-                if substring_grams.len() >= MAX_INDEX_SUBSTRING_GRAMS_PER_FILE {
-                    term_truncated = true;
+            let chars = lower.chars().collect::<Vec<_>>();
+            for width in 1..=chars.len().min(3) {
+                for window in chars.windows(width) {
+                    if substring_grams.len() >= MAX_INDEX_SUBSTRING_GRAMS_PER_FILE {
+                        term_truncated = true;
+                        break;
+                    }
+                    substring_grams.insert(unicode_sequence_gram_key(window));
+                }
+                if term_truncated && substring_grams.len() >= MAX_INDEX_SUBSTRING_GRAMS_PER_FILE {
                     break;
                 }
-                substring_grams.insert(unicode_scalar_gram_key(ch));
             }
         }
     }

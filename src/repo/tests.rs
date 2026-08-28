@@ -1853,3 +1853,11 @@ fn broad_lane_round_robins_top_level_directories() {
         .collect::<HashSet<_>>();
     assert_eq!(first_three.len(), 3);
 }
+
+#[test]
+fn unicode_substring_grams_preserve_sequence_order() {
+    let forward = query_substring_grams(&crate::core::unicode_search_fold("認証処理"));
+    let reordered = query_substring_grams(&crate::core::unicode_search_fold("証認処理"));
+    assert_ne!(forward, reordered);
+    assert!(!forward.is_empty());
+}

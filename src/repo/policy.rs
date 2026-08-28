@@ -279,6 +279,11 @@ pub(super) fn is_denied(path: &Path) -> bool {
     {
         return true;
     }
+    if parts.windows(2).any(|pair| {
+        pair[0] == ".cargo" && matches!(pair[1].as_str(), "credentials" | "credentials.toml")
+    }) {
+        return true;
+    }
 
     let Some(name) = parts.last().map(String::as_str) else {
         return true;
@@ -294,6 +299,10 @@ pub(super) fn is_denied(path: &Path) -> bool {
             | "id_dsa"
             | "id_ecdsa"
             | ".envrc"
+            | ".terraformrc"
+            | "terraform.rc"
+            | ".vault-token"
+            | "auth.json"
             | ".secrets"
             | "secrets.json"
             | "secrets.yaml"
@@ -342,6 +351,12 @@ mod tests {
         assert!(is_denied(Path::new("nested/.ENV.Production")));
         assert!(is_denied(Path::new("Secrets.JSON")));
         assert!(is_denied(Path::new(".GIT/config")));
+        assert!(is_denied(Path::new(".terraformrc")));
+        assert!(is_denied(Path::new("terraform.rc")));
+        assert!(is_denied(Path::new(".vault-token")));
+        assert!(is_denied(Path::new("auth.json")));
+        assert!(is_denied(Path::new(".cargo/credentials.toml")));
+        assert!(!is_denied(Path::new(".cargo/config.toml")));
         assert!(!is_denied(Path::new(".ENV.Example")));
     }
 

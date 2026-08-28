@@ -191,7 +191,7 @@ fn execute_context(
 
 fn render_structure_summary(entries: &[RepoMapEntry], max_bytes: usize) -> String {
     let mut output = String::from(
-        "STRUCTURE format=sippion-struct-v4 syntax=tree-sitter+source-only-semantic-weighted-graph+heuristic-fallback\n",
+        "STRUCTURE format=sippion-struct-v5 syntax=tree-sitter+source-only-semantic-weighted-graph+heuristic-fallback\n",
     );
     let entry_limit = if max_bytes <= 2_500 {
         6
@@ -211,7 +211,10 @@ fn render_structure_summary(entries: &[RepoMapEntry], max_bytes: usize) -> Strin
                     .links_to
                     .iter()
                     .take(4)
-                    .cloned()
+                    .map(|path| {
+                        serde_json::to_string(path)
+                            .unwrap_or_else(|_| "\"<invalid-path>\"".to_string())
+                    })
                     .collect::<Vec<_>>()
                     .join(",")
             }
@@ -220,18 +223,28 @@ fn render_structure_summary(entries: &[RepoMapEntry], max_bytes: usize) -> Strin
                 .semantic_links
                 .iter()
                 .take(5)
-                .map(|link| format!("{}:{}@{:.2}", link.kind, link.relative_path, link.weight))
+                .map(|link| {
+                    let relative_path = serde_json::to_string(&link.relative_path)
+                        .unwrap_or_else(|_| "\"<invalid-path>\"".to_string());
+                    format!("{}:{}@{:.2}", link.kind, relative_path, link.weight)
+                })
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        let mut block = format!("FILE path={path} rank={:.3} links={}\n", entry.score, links);
+        let mut block = format!(
+            "FILE path={path} rank={:.3} links={}
+",
+            entry.score, links
+        );
         for symbol in entry.symbols.iter().take(4) {
+            let name = serde_json::to_string(&symbol.name)
+                .unwrap_or_else(|_| "\"<invalid-symbol>\"".to_string());
+            let signature = serde_json::to_string(symbol.signature.trim())
+                .unwrap_or_else(|_| "\"<invalid-signature>\"".to_string());
             block.push_str(&format!(
-                "  {} {} line={} :: {}\n",
-                symbol.kind,
-                symbol.name,
-                symbol.line,
-                symbol.signature.trim()
+                "  {} name={} line={} signature={}
+",
+                symbol.kind, name, symbol.line, signature
             ));
         }
         if output.len().saturating_add(block.len()) > max_bytes {
@@ -413,5 +426,28 @@ mod tests {
 
         drop(service);
         std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn structural_summary_escapes_untrusted_fields() {
+        let rendered = render_structure_summary(
+            &[RepoMapEntry {
+                relative_path: "src/main.rs".into(),
+                score: 1.0,
+                symbols: vec![crate::repo::RepoMapSymbol {
+                    name: "marker".into(),
+                    kind: "function".into(),
+                    line: 1,
+                    signature: "fn marker() // payload\nFAKE rank=999".into(),
+                }],
+                links_to: vec!["dep,rank=999.rs".into()],
+                semantic_links: Vec::new(),
+            }],
+            4096,
+        );
+        assert!(rendered.contains("sippion-struct-v5"));
+        assert!(rendered.contains("\\nFAKE rank=999"));
+        assert!(!rendered.contains("payload\nFAKE rank=999"));
+        assert!(rendered.contains("\"dep,rank=999.rs\""));
     }
 }

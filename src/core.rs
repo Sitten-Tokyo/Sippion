@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use unicode_casefold::UnicodeCaseFold;
+use unicode_normalization::char::decompose_compatible;
 
 pub const PRODUCT_NAME: &str = "Sippion";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -14,16 +16,34 @@ const QUERY_STOPWORDS: &[&str] = &[
     "with",
 ];
 
-/// Unicode-aware lowercase used only for retrieval/ranking equivalence. Security path policy keeps
-/// its deliberately narrower ASCII folding so filesystem-policy semantics do not change here.
-#[must_use]
-pub(crate) fn unicode_search_fold(text: &str) -> String {
-    text.to_lowercase()
+/// Compatibility-decomposed full Unicode case folding used only for retrieval/ranking
+/// equivalence. Security path policy keeps its deliberately narrower ASCII folding so filesystem
+/// policy semantics do not change here. Folding each original scalar independently preserves a
+/// precise source-byte provenance map while still covering full folds such as ß -> ss and common
+/// composed/decomposed compatibility-equivalent spellings.
+fn fold_search_scalar(ch: char, mut emit: impl FnMut(char)) {
+    decompose_compatible(ch, |decomposed| {
+        for folded in decomposed.case_fold() {
+            decompose_compatible(folded, &mut emit);
+        }
+    });
 }
 
-/// Finds a folded search term while returning the byte offset in the original UTF-8 text. Unicode
-/// lowercasing can change encoded length, so callers that need source excerpts must not use the
-/// folded string's byte position directly.
+#[must_use]
+pub(crate) fn unicode_search_fold(text: &str) -> String {
+    if text.is_ascii() {
+        return text.to_ascii_lowercase();
+    }
+    let mut folded = String::with_capacity(text.len());
+    for ch in text.chars() {
+        fold_search_scalar(ch, |folded_ch| folded.push(folded_ch));
+    }
+    folded
+}
+
+/// Finds a folded search term while returning the byte offset in the original UTF-8 text. Full
+/// case folding and compatibility decomposition can change encoded length, so callers that need
+/// source excerpts must never use the folded string's byte position directly.
 #[must_use]
 pub(crate) fn unicode_search_fold_find_byte(text: &str, folded_needle: &str) -> Option<usize> {
     if folded_needle.is_empty() {
@@ -36,12 +56,9 @@ pub(crate) fn unicode_search_fold_find_byte(text: &str, folded_needle: &str) -> 
     let mut folded = String::with_capacity(text.len());
     let mut folded_byte_to_source = Vec::with_capacity(text.len());
     for (source_byte, ch) in text.char_indices() {
-        for folded_ch in ch.to_lowercase() {
-            let mut buffer = [0u8; 4];
-            let encoded = folded_ch.encode_utf8(&mut buffer);
-            folded.push_str(encoded);
-            folded_byte_to_source.extend(std::iter::repeat_n(source_byte, encoded.len()));
-        }
+        let before = folded.len();
+        fold_search_scalar(ch, |folded_ch| folded.push(folded_ch));
+        folded_byte_to_source.extend(std::iter::repeat_n(source_byte, folded.len() - before));
     }
     let folded_byte = folded.find(folded_needle)?;
     folded_byte_to_source.get(folded_byte).copied()
@@ -468,7 +485,13 @@ mod tests {
         }
         .normalize()
         .expect("Unicode query");
-        assert_eq!(unicode.terms, vec!["äuth", "überprüfung"]);
+        assert_eq!(
+            unicode.terms,
+            vec![
+                unicode_search_fold("ÄUTH"),
+                unicode_search_fold("Überprüfung")
+            ]
+        );
     }
 
     #[test]
@@ -606,5 +629,38 @@ mod tests {
             adaptive_context_budget(0.30, 17, 20, 8).hard_model_text_bytes,
             32 * 1024
         );
+    }
+
+    #[test]
+    fn unicode_search_fold_handles_full_casefold_and_compatibility_decomposition() {
+        assert_eq!(unicode_search_fold("Straße"), "strasse");
+        assert_eq!(
+            unicode_search_fold("CAFÉ"),
+            unicode_search_fold("Cafe\u{301}")
+        );
+        assert_eq!(unicode_search_fold("ﬃAuth"), "ffiauth");
+        assert_eq!(unicode_search_fold("Σςσ"), "σσσ");
+    }
+
+    #[test]
+    fn unicode_fold_find_property_corpus_preserves_source_offsets() {
+        let alphabet = [
+            'A', 'ß', 'é', '\u{301}', 'Σ', 'ς', 'K', 'ﬃ', '認', '証', '_', '9',
+        ];
+        let mut state = 0x9e37_79b9_u64;
+        for _ in 0..256 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let len = 1 + (state as usize % 8);
+            let mut sample = String::new();
+            for _ in 0..len {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                sample.push(alphabet[state as usize % alphabet.len()]);
+            }
+            let folded = unicode_search_fold(&sample);
+            assert_eq!(unicode_search_fold(&folded), folded);
+            let text = format!("prefix|{sample}|suffix");
+            let offset = unicode_search_fold_find_byte(&text, &folded).expect("folded match");
+            assert_eq!(offset, "prefix|".len(), "sample={sample:?}");
+        }
     }
 }
