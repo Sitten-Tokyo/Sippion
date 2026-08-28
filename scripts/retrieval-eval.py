@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import statistics
 import subprocess
 import time
 from pathlib import Path
+
+SOURCE_EXTENSIONS = {
+    ".rs", ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+    ".go", ".java", ".cs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+}
+PRUNED_DIRS = {
+    "node_modules", "target", "dist", "build", "coverage", ".venv", "venv", "__pycache__",
+    ".next", "vendor", ".terraform", ".gradle", ".dart_tool", ".pytest_cache", ".ruff_cache",
+}
 
 
 def percentile(values, p):
@@ -18,13 +28,47 @@ def percentile(values, p):
     return ordered[low] * (1 - fraction) + ordered[high] * fraction
 
 
+def estimated_tokens(text):
+    encoded = text.encode("utf-8")
+    non_ascii = sum(1 for ch in text if not ch.isascii())
+    return math.ceil((len(encoded) + non_ascii * 2) / 3)
+
+
+def full_source_baseline(root):
+    root = Path(root)
+    total = 0
+    files = 0
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if any(part.lower() in PRUNED_DIRS for part in relative.parts[:-1]):
+            continue
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        total += estimated_tokens(text)
+        files += 1
+    return max(total, 1), files
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default="target/release/sippion")
     parser.add_argument("--cases", default="eval/cases.json")
     parser.add_argument("--fixture", default="eval/fixture")
+    parser.add_argument("--baseline-root", default=None)
     args = parser.parse_args()
     config = json.loads(Path(args.cases).read_text(encoding="utf-8"))
+    baseline_root = args.baseline_root or args.fixture
+    baseline_tokens, baseline_files = full_source_baseline(baseline_root)
+
     results = []
     failures = []
     reciprocal_ranks = []
@@ -83,6 +127,9 @@ def main():
             failures.append(
                 f"{case['name']}: latency {elapsed_ms:.1f}ms > {max_latency:.1f}ms"
             )
+        returned_tokens = max(diagnostic["estimated_tokens"], 1)
+        savings = 1.0 - min(returned_tokens / baseline_tokens, 1.0)
+        relevant_per_1k = len(set(relevant_at5)) * 1000.0 / returned_tokens
         results.append({
             "name": case["name"],
             "rank": rank,
@@ -91,6 +138,8 @@ def main():
             "unnecessaryFileRatio": round(unnecessary_ratio, 4),
             "returnedBytes": diagnostic["returned_bytes"],
             "estimatedTokens": diagnostic["estimated_tokens"],
+            "tokenSavingsVsFullSource": round(savings, 4),
+            "relevantPathsPer1kTokens": round(relevant_per_1k, 4),
             "elapsedMs": round(elapsed_ms, 2),
         })
 
@@ -99,11 +148,14 @@ def main():
     mrr = sum(reciprocal_ranks) / count if count else 0.0
     expected_path_recall = expected_path_hits / expected_path_total if expected_path_total else 0.0
     avg_tokens = statistics.fmean(r["estimatedTokens"] for r in results) if results else 0.0
-    avg_unnecessary = (
-        statistics.fmean(r["unnecessaryFileRatio"] for r in results) if results else 0.0
+    avg_unnecessary = statistics.fmean(r["unnecessaryFileRatio"] for r in results) if results else 0.0
+    avg_savings = statistics.fmean(r["tokenSavingsVsFullSource"] for r in results) if results else 0.0
+    avg_relevant_per_1k = (
+        statistics.fmean(r["relevantPathsPer1kTokens"] for r in results) if results else 0.0
     )
     latencies = [r["elapsedMs"] for r in results]
     p95_latency = percentile(latencies, 0.95)
+
     if recall < config["minRecallAt5"]:
         failures.append(f"Recall@5 {recall:.3f} < {config['minRecallAt5']:.3f}")
     if mrr < config["minMrr"]:
@@ -124,11 +176,25 @@ def main():
         failures.append(
             f"p95 latency {p95_latency:.1f}ms > {config['maxP95LatencyMs']:.1f}ms"
         )
+    min_savings = config.get("minAverageTokenSavings")
+    if min_savings is not None and avg_savings < min_savings:
+        failures.append(f"average token savings {avg_savings:.3f} < {min_savings:.3f}")
+    min_efficiency = config.get("minRelevantPathsPer1kTokens")
+    if min_efficiency is not None and avg_relevant_per_1k < min_efficiency:
+        failures.append(
+            f"relevant paths / 1k tokens {avg_relevant_per_1k:.3f} < {min_efficiency:.3f}"
+        )
+
     summary = {
+        "baselineRoot": str(baseline_root),
+        "baselineSourceFiles": baseline_files,
+        "baselineEstimatedTokens": baseline_tokens,
         "recallAt5": round(recall, 4),
         "mrr": round(mrr, 4),
         "expectedPathRecallAt5": round(expected_path_recall, 4),
         "averageEstimatedTokens": round(avg_tokens, 2),
+        "averageTokenSavingsVsFullSource": round(avg_savings, 4),
+        "averageRelevantPathsPer1kTokens": round(avg_relevant_per_1k, 4),
         "averageUnnecessaryFileRatio": round(avg_unnecessary, 4),
         "p50LatencyMs": round(percentile(latencies, 0.50), 2),
         "p95LatencyMs": round(p95_latency, 2),
