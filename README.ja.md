@@ -68,6 +68,27 @@ Windowsではstable safe Rust API（安定版Rustの安全なAPI）だけでは�
 明示的なopt-out（利用者が意図して検証を外す設定）もdirect installerに残しています。
 詳細は [Security and trust boundary](docs/security.md) を参照してください。
 
+## Official MCP Registry
+
+SippionはOfficial MCP Registryに `io.github.Sitten-Tokyo/sippion` という名前で公開しています。
+Registryの最新レコードは
+[stable APIのSippion latest entry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.Sitten-Tokyo%2Fsippion/versions/latest)
+から確認できます。
+
+Registry配布対象の各Releaseには、native binaryに加えて、checksumとprovenance attestationを持つ
+4つのplatform別MCPBを含めます。
+
+```text
+sippion-linux-x86_64.mcpb
+sippion-windows-x86_64.mcpb
+sippion-macos-aarch64.mcpb
+sippion-macos-x86_64.mcpb
+```
+
+MCPB manifestはhost側に明示的なproject rootを要求し、同じlocal stdio serverを起動します。
+Codex、Claude Code、Antigravityの設定まで自動で行いたい場合は、上のbootstrap + `sippion setup`
+経路を引き続き推奨します。Registry/MCPBは、標準化された追加のdiscovery / install channelです。
+
 ## Sippionは何をするの？
 
 AIクライアントは、たとえば次のようにSippionへ問い合わせます。
