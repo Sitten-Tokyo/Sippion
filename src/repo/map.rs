@@ -1,5 +1,113 @@
 use super::*;
 
+const MAX_SEMANTIC_EXPANSION_FILES: usize = 8;
+const MAX_EXPANSION_IMPORTS_PER_SEED: usize = 16;
+
+struct BuiltMapCandidate {
+    candidate: MapCandidate,
+    redacted_bytes: usize,
+    folded_bytes: usize,
+    redaction_truncated: bool,
+}
+
+fn normalized_module_name(value: &str) -> String {
+    let mut normalized = crate::core::unicode_search_fold(value)
+        .replace("::", "/")
+        .replace(['.', '\\'], "/");
+    while normalized.starts_with("./") || normalized.starts_with("../") {
+        normalized = normalized
+            .strip_prefix("./")
+            .or_else(|| normalized.strip_prefix("../"))
+            .unwrap_or(&normalized)
+            .to_string();
+    }
+    for prefix in ["crate/", "self/", "super/"] {
+        normalized = normalized.strip_prefix(prefix).unwrap_or(&normalized).to_string();
+    }
+    normalized.trim_matches('/').to_string()
+}
+
+fn normalized_path_module(path: &str) -> String {
+    let folded = crate::core::unicode_search_fold(path).replace('\\', "/");
+    let no_ext = Path::new(&folded)
+        .with_extension("")
+        .to_string_lossy()
+        .replace('\\', "/");
+    no_ext
+        .trim_end_matches("/mod")
+        .trim_end_matches("/index")
+        .trim_matches('/')
+        .to_string()
+}
+
+fn ranked_symbols(
+    query: &NormalizedQuery,
+    safe: &str,
+    analysis: &CachedAnalysis,
+) -> Vec<RepoMapSymbol> {
+    let safe_lines = safe.lines().collect::<Vec<_>>();
+    let mut symbols = analysis
+        .symbols
+        .iter()
+        .map(|symbol| RepoMapSymbol {
+            name: symbol.name.clone(),
+            kind: symbol.kind.clone(),
+            line: symbol.line,
+            signature: signature_from_lines(&safe_lines, symbol.line),
+        })
+        .collect::<Vec<_>>();
+    symbols.sort_by(|a, b| {
+        let score = |symbol: &RepoMapSymbol| {
+            let name = crate::core::unicode_search_fold(&symbol.name);
+            let signature = crate::core::unicode_search_fold(&symbol.signature);
+            query
+                .terms
+                .iter()
+                .map(|term| {
+                    if name.as_str() == term.as_str() {
+                        6usize
+                    } else if name.contains(term.as_str()) {
+                        4usize
+                    } else if signature.contains(term.as_str()) {
+                        2usize
+                    } else {
+                        0usize
+                    }
+                })
+                .sum::<usize>()
+        };
+        score(b)
+            .cmp(&score(a))
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    symbols.truncate(12);
+    symbols
+}
+
+fn semantic_query_bonus(query: &NormalizedQuery, semantics: &SemanticFacts) -> f64 {
+    semantics
+        .references
+        .iter()
+        .map(|reference| {
+            let name = crate::core::unicode_search_fold(&reference.name);
+            let overlap = query
+                .terms
+                .iter()
+                .filter(|term| name.contains(term.as_str()))
+                .count() as f64;
+            let weight = match reference.kind.as_str() {
+                "implementation" => 1.0,
+                "call" => 0.9,
+                "type" => 0.85,
+                _ => 0.6,
+            };
+            overlap * weight
+        })
+        .sum::<f64>()
+        .min(8.0)
+}
+
 impl RepositoryAccess {
     pub(super) fn graph_cache_get(
         &self,
@@ -43,9 +151,6 @@ impl RepositoryAccess {
         Ok(())
     }
 
-    /// Builds a query-focused structural graph from an already-ranked bounded candidate set.
-    /// This avoids a second repository-wide search when `repo_context` needs both retrieval and
-    /// structural evidence in one MCP call.
     #[cfg(test)]
     pub fn map_from_hits(
         &self,
@@ -66,11 +171,25 @@ impl RepositoryAccess {
         cancellation: Option<&AtomicBool>,
         started: &Instant,
     ) -> Result<RepositoryMapOutcome, RepositoryAccessError> {
-        // Windows' stable metadata surface at this MSRV cannot distinguish every same-size,
-        // same-mtime replacement. The verified open-handle stamp still protects each individual
-        // read from concurrent mutation, but it is not a safe cross-request content identity.
-        // Serialize top-level map construction and discard prior structural caches before reading
-        // candidates so stale symbols, semantic facts, or graph edges cannot cross requests.
+        self.map_from_hits_with_snapshots_since(
+            query,
+            hits,
+            &HashMap::new(),
+            max_files,
+            cancellation,
+            started,
+        )
+    }
+
+    pub(crate) fn map_from_hits_with_snapshots_since(
+        &self,
+        query: &NormalizedQuery,
+        hits: &[SearchHit],
+        snapshots: &HashMap<String, Arc<str>>,
+        max_files: usize,
+        cancellation: Option<&AtomicBool>,
+        started: &Instant,
+    ) -> Result<RepositoryMapOutcome, RepositoryAccessError> {
         #[cfg(windows)]
         let _windows_map_guard = self
             .windows_map_serial
@@ -88,11 +207,6 @@ impl RepositoryAccess {
         let structural_limit = max_files.min(16);
         let mut structural_collection_enabled = true;
 
-        // Revalidate every returned search hit before any excerpt is rendered. This is especially
-        // important on Windows: size + mtime can be preserved across a same-length rewrite, so an
-        // adaptive-round verification cache can otherwise carry a stale excerpt into the final
-        // context. Structural analysis remains limited to `structural_limit`; lower-ranked hits are
-        // read only for generation/fingerprint validation and are not retained as source bodies.
         for (hit_index, hit) in hits.iter().enumerate() {
             if is_cancelled(cancellation) {
                 return Err(RepositoryAccessError::Cancelled);
@@ -106,11 +220,10 @@ impl RepositoryAccess {
                 );
                 break;
             }
-            let source = match self.read_source(&hit.relative_path) {
-                Ok(source) => source,
-                Err((_error, _)) => {
-                    // If the current file cannot be re-opened and re-verified, the previously
-                    // collected excerpt is no longer safe to present as current evidence.
+
+            let source = match self.verified_source_for_map_hit(hit, snapshots)? {
+                Some(source) => source,
+                None => {
                     invalidated_evidence_paths.push(hit.relative_path.clone());
                     truncated = true;
                     continue;
@@ -121,8 +234,6 @@ impl RepositoryAccess {
                 .as_ref()
                 .is_some_and(|expected| expected != &source.stamp)
             {
-                // Evidence and structure must describe one file generation. A changed candidate is
-                // omitted rather than mixing stale evidence with fresh structural analysis.
                 truncated = true;
                 invalidated_evidence_paths.push(hit.relative_path.clone());
                 continue;
@@ -131,16 +242,11 @@ impl RepositoryAccess {
                 .source_fingerprint
                 .is_some_and(|expected| expected != source_content_fingerprint(&source.text))
             {
-                // SourceStamp is intentionally conservative but Windows can preserve size + mtime
-                // across a rewrite. The content fingerprint closes that within-call consistency gap.
                 truncated = true;
                 invalidated_evidence_paths.push(hit.relative_path.clone());
                 continue;
             }
 
-            // Evidence for this hit is current. Lower-ranked hits need no structural work, and once
-            // the structural budget/deadline is exhausted we keep validating evidence without
-            // retaining or analyzing additional source bodies.
             if hit_index >= structural_limit || !structural_collection_enabled {
                 continue;
             }
@@ -151,133 +257,84 @@ impl RepositoryAccess {
                 continue;
             }
 
-            // Redaction markers can be longer than the secret they replace (for example
-            // `token="x"`). Bound the redacted representation before analysis so a crafted
-            // repository cannot turn the 32 MiB raw-source budget into hundreds of MiB of retained
-            // folded buffers. The bounded redactor also suppresses giant single lines before any
-            // allocating per-line redactor sees them.
-            let redaction = redact_high_confidence_secrets_bounded(&source.text, MAX_SOURCE_BYTES);
-            if redaction.truncated {
-                truncated = true;
-            }
-            map_redacted_bytes = map_redacted_bytes.saturating_add(redaction.text.len());
-            if map_redacted_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES {
-                truncated = true;
-                structural_collection_enabled = false;
-                continue;
-            }
-            let safe = redaction.text;
-            let Some(analysis) = self.analyze_source_cached(
+            let Some(built) = self.build_map_candidate(
+                query,
                 &hit.relative_path,
-                &safe,
-                &source.stamp,
+                source,
+                hit.score,
                 cancellation,
-                *started + MAX_SEARCH_WALL_TIME,
+                started,
             )?
             else {
                 truncated = true;
                 structural_collection_enabled = false;
                 continue;
             };
-            let mut definition_names = analysis
-                .symbols
-                .iter()
-                .map(|symbol| crate::core::unicode_search_fold(&symbol.name))
-                .filter(|name| name.len() >= 2)
-                .collect::<Vec<_>>();
-            definition_names.sort();
-            definition_names.dedup();
-
-            // Shared analysis caches contain structural metadata only. Rehydrate display/ranking
-            // signatures from the freshly verified, redacted source for this call so source-line
-            // text never persists in the cross-agent cache.
-            let safe_lines = safe.lines().collect::<Vec<_>>();
-            let mut symbols = analysis
-                .symbols
-                .iter()
-                .map(|symbol| RepoMapSymbol {
-                    name: symbol.name.clone(),
-                    kind: symbol.kind.clone(),
-                    line: symbol.line,
-                    signature: signature_from_lines(&safe_lines, symbol.line),
-                })
-                .collect::<Vec<_>>();
-            symbols.sort_by(|a, b| {
-                let score = |symbol: &RepoMapSymbol| {
-                    let name = crate::core::unicode_search_fold(&symbol.name);
-                    let signature = crate::core::unicode_search_fold(&symbol.signature);
-                    query
-                        .terms
-                        .iter()
-                        .map(|term| {
-                            if name.as_str() == term.as_str() {
-                                6usize
-                            } else if name.contains(term.as_str()) {
-                                4usize
-                            } else if signature.contains(term.as_str()) {
-                                2usize
-                            } else {
-                                0usize
-                            }
-                        })
-                        .sum::<usize>()
-                };
-                score(b)
-                    .cmp(&score(a))
-                    .then_with(|| a.line.cmp(&b.line))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            symbols.truncate(12);
-
-            // Tier 2 is source-only semantic analysis. The parsed facts are shared across agents
-            // only while the verified source stamp remains unchanged.
-            let semantics = analysis.semantics.clone();
-            let semantic_query_bonus = semantics
-                .references
-                .iter()
-                .map(|reference| {
-                    let name = crate::core::unicode_search_fold(&reference.name);
-                    let overlap = query
-                        .terms
-                        .iter()
-                        .filter(|term| name.contains(term.as_str()))
-                        .count() as f64;
-                    let weight = match reference.kind.as_str() {
-                        "implementation" => 1.0,
-                        "call" => 0.9,
-                        "type" => 0.85,
-                        _ => 0.6,
-                    };
-                    overlap * weight
-                })
-                .sum::<f64>()
-                .min(8.0);
-
-            drop(safe_lines);
-            let source_lower = crate::core::unicode_search_fold(&safe);
-            map_folded_bytes = map_folded_bytes.saturating_add(source_lower.len());
-            if map_folded_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES {
+            truncated |= built.redaction_truncated;
+            map_redacted_bytes = map_redacted_bytes.saturating_add(built.redacted_bytes);
+            map_folded_bytes = map_folded_bytes.saturating_add(built.folded_bytes);
+            if map_redacted_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES
+                || map_folded_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES
+            {
                 truncated = true;
                 structural_collection_enabled = false;
                 continue;
             }
-
-            candidates.push(MapCandidate {
-                relative_path: hit.relative_path.clone(),
-                stamp: source.stamp,
-                search_score: hit.score,
-                source_lower,
-                symbols,
-                definition_names,
-                semantics,
-                analysis_cacheable: analysis.cacheable,
-                semantic_query_bonus,
-            });
+            candidates.push(built.candidate);
         }
 
-        // Canonicalize candidate order so sibling agents that discover the same file set in a
-        // different ranking order can share the exact same structural graph cache entry.
+        // One-hop source-only semantic expansion lets a lexically discovered seed pull in a bounded
+        // imported/module neighbor that did not itself contain the query terms. Expanded files are
+        // structural evidence only; they do not manufacture a source excerpt or bypass verification.
+        if structural_collection_enabled && !search_timed_out(started) {
+            let expansion_paths = self.semantic_expansion_paths(&candidates, MAX_SEMANTIC_EXPANSION_FILES)?;
+            for (path, expansion_score) in expansion_paths {
+                if is_cancelled(cancellation) {
+                    return Err(RepositoryAccessError::Cancelled);
+                }
+                if search_timed_out(started) {
+                    truncated = true;
+                    break;
+                }
+                let source = match self.read_source(&path) {
+                    Ok(source) => source,
+                    Err((_error, _)) => {
+                        truncated = true;
+                        continue;
+                    }
+                };
+                map_source_bytes = map_source_bytes.saturating_add(source.source_bytes);
+                if map_source_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES {
+                    truncated = true;
+                    break;
+                }
+                let Some(built) = self.build_map_candidate(
+                    query,
+                    &path,
+                    source,
+                    expansion_score,
+                    cancellation,
+                    started,
+                )?
+                else {
+                    truncated = true;
+                    continue;
+                };
+                truncated |= built.redaction_truncated;
+                map_redacted_bytes = map_redacted_bytes.saturating_add(built.redacted_bytes);
+                map_folded_bytes = map_folded_bytes.saturating_add(built.folded_bytes);
+                if map_redacted_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES
+                    || map_folded_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES
+                {
+                    truncated = true;
+                    break;
+                }
+                candidates.push(built.candidate);
+            }
+        }
+
         candidates.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        candidates.dedup_by(|a, b| a.relative_path == b.relative_path);
 
         let graph_key = GraphCacheKey(
             candidates
@@ -307,8 +364,6 @@ impl RepositoryAccess {
                 }
             }
 
-            // Strongest evidence wins for each file pair: implementation .95, call .90, type .85,
-            // exact reference .80, import .40, lexical coincidence .15.
             let mut edge_maps = vec![HashMap::<usize, (f64, String)>::new(); candidates.len()];
             for (from, candidate) in candidates.iter().enumerate() {
                 if is_cancelled(cancellation) {
@@ -361,7 +416,6 @@ impl RepositoryAccess {
                 }
             }
 
-            // Preserve RC25's Aho-Corasick structural hint as a weak fallback only.
             let mut patterns = Vec::<String>::new();
             let mut pattern_targets = Vec::<Vec<usize>>::new();
             let mut pattern_ids = HashMap::<String, usize>::new();
@@ -499,5 +553,220 @@ impl RepositoryAccess {
             truncated,
             invalidated_evidence_paths,
         })
+    }
+
+    fn verified_source_for_map_hit(
+        &self,
+        hit: &SearchHit,
+        snapshots: &HashMap<String, Arc<str>>,
+    ) -> Result<Option<VerifiedSource>, RepositoryAccessError> {
+        #[cfg(not(windows))]
+        if let (Some(snapshot), Some(expected_stamp)) = (
+            snapshots.get(hit.relative_path.as_str()),
+            hit.source_stamp.as_ref(),
+        ) {
+            let current = match self.verified_metadata_stamp(&hit.relative_path) {
+                Ok(stamp) => stamp,
+                Err(_) => return Ok(None),
+            };
+            if &current != expected_stamp {
+                return Ok(None);
+            }
+            if hit
+                .source_fingerprint
+                .is_some_and(|expected| expected != source_content_fingerprint(snapshot))
+            {
+                return Ok(None);
+            }
+            return Ok(Some(VerifiedSource {
+                text: snapshot.to_string(),
+                source_bytes: snapshot.len(),
+                stamp: current,
+            }));
+        }
+
+        match self.read_source(&hit.relative_path) {
+            Ok(source) => Ok(Some(source)),
+            Err((_error, _)) => Ok(None),
+        }
+    }
+
+    fn build_map_candidate(
+        &self,
+        query: &NormalizedQuery,
+        path: &str,
+        source: VerifiedSource,
+        search_score: f64,
+        cancellation: Option<&AtomicBool>,
+        started: &Instant,
+    ) -> Result<Option<BuiltMapCandidate>, RepositoryAccessError> {
+        let redaction = redact_high_confidence_secrets_bounded(&source.text, MAX_SOURCE_BYTES);
+        let redaction_truncated = redaction.truncated;
+        let redacted_bytes = redaction.text.len();
+        let safe = redaction.text;
+        let Some(analysis) = self.analyze_source_cached(
+            path,
+            &safe,
+            &source.stamp,
+            cancellation,
+            *started + MAX_SEARCH_WALL_TIME,
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut definition_names = analysis
+            .symbols
+            .iter()
+            .map(|symbol| crate::core::unicode_search_fold(&symbol.name))
+            .filter(|name| name.len() >= 2)
+            .collect::<Vec<_>>();
+        definition_names.sort();
+        definition_names.dedup();
+        let symbols = ranked_symbols(query, &safe, &analysis);
+        let semantics = analysis.semantics.clone();
+        let semantic_query_bonus = semantic_query_bonus(query, &semantics);
+        let source_lower = crate::core::unicode_search_fold(&safe);
+        let folded_bytes = source_lower.len();
+        Ok(Some(BuiltMapCandidate {
+            candidate: MapCandidate {
+                relative_path: path.to_string(),
+                stamp: source.stamp,
+                search_score,
+                source_lower,
+                symbols,
+                definition_names,
+                semantics,
+                analysis_cacheable: analysis.cacheable,
+                semantic_query_bonus,
+            },
+            redacted_bytes,
+            folded_bytes,
+            redaction_truncated,
+        }))
+    }
+
+    fn semantic_expansion_paths(
+        &self,
+        seeds: &[MapCandidate],
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, RepositoryAccessError> {
+        if limit == 0 || seeds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let existing = seeds
+            .iter()
+            .map(|candidate| candidate.relative_path.as_str())
+            .collect::<HashSet<_>>();
+        let index = self
+            .ram_index
+            .lock()
+            .map_err(|_| RepositoryAccessError::Io)?;
+        let mut by_stem = HashMap::<String, Vec<String>>::new();
+        let mut by_module = HashMap::<String, String>::new();
+        for path in index.files.keys() {
+            if existing.contains(path.as_str()) {
+                continue;
+            }
+            let module = normalized_path_module(path);
+            if !module.is_empty() {
+                by_module.entry(module.clone()).or_insert_with(|| path.clone());
+            }
+            if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
+                let stem = crate::core::unicode_search_fold(stem);
+                if stem.len() >= 2 {
+                    by_stem.entry(stem).or_default().push(path.clone());
+                }
+            }
+        }
+        drop(index);
+
+        let mut scores = HashMap::<String, f64>::new();
+        for seed in seeds {
+            for import in seed
+                .semantics
+                .import_paths
+                .iter()
+                .take(MAX_EXPANSION_IMPORTS_PER_SEED)
+            {
+                let module = normalized_module_name(import);
+                if module.is_empty() {
+                    continue;
+                }
+                if let Some(path) = by_module.get(&module) {
+                    scores
+                        .entry(path.clone())
+                        .and_modify(|score| *score = score.max(seed.search_score * 0.08 + 9.0))
+                        .or_insert(seed.search_score * 0.08 + 9.0);
+                }
+                let segments = module
+                    .split('/')
+                    .filter(|part| part.len() >= 2)
+                    .collect::<Vec<_>>();
+                for (distance, segment) in segments.iter().rev().take(3).enumerate() {
+                    let Some(paths) = by_stem.get(*segment) else {
+                        continue;
+                    };
+                    let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
+                    for path in paths.iter().take(4) {
+                        scores
+                            .entry(path.clone())
+                            .and_modify(|score| *score = score.max(base))
+                            .or_insert(base);
+                    }
+                }
+            }
+        }
+        let mut ranked = scores.into_iter().collect::<Vec<_>>();
+        ranked.sort_by(|(left_path, left_score), (right_path, right_score)| {
+            right_score
+                .partial_cmp(left_score)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left_path.cmp(right_path))
+        });
+        ranked.truncate(limit);
+        Ok(ranked)
+    }
+}
+
+#[cfg(test)]
+mod optimized_tests {
+    use super::*;
+    use crate::core::McpToolInput;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn import_neighbor_can_enter_structure_without_lexical_query_match() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sippion-map-expand-{nonce}"));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(
+            root.join("main.rs"),
+            "mod dependency;\nuse crate::dependency::Helper;\nfn unique_entrypoint() { let _ = Helper; }\n",
+        )
+        .expect("main");
+        std::fs::write(root.join("dependency.rs"), "pub struct Helper;\n").expect("dep");
+        let repository = RepositoryAccess::open(&root).expect("repo");
+        let query = McpToolInput {
+            q: "unique_entrypoint".into(),
+            ..Default::default()
+        }
+        .normalize()
+        .expect("query");
+        let search = repository.search(&query, 8, None).expect("search");
+        assert!(search.hits.iter().any(|hit| hit.relative_path == "main.rs"));
+        assert!(!search.hits.iter().any(|hit| hit.relative_path == "dependency.rs"));
+        let mapped = repository
+            .map_from_hits(&query, &search.hits, 8, None)
+            .expect("map");
+        assert!(
+            mapped
+                .entries
+                .iter()
+                .any(|entry| entry.relative_path == "dependency.rs")
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
