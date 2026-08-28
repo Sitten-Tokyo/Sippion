@@ -31,6 +31,7 @@ new = \'''                for import_path in &candidate.semantics.import_paths {
                         }
                     }
                 }
+            }
 
 \'''
 text = text[:start] + new + text[end:]
