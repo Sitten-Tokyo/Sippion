@@ -3,6 +3,19 @@
 Sippion exposes one public MCP operation, `repo_context`. The local stdio
 transport passes a validated request to the in-process service boundary:
 
+## Optimization objective
+
+Sippion's primary optimization objective is to organize and bound repository
+context **before it is passed to an AI model**. By narrowing repository evidence
+before broad file reads, Sippion aims to reduce unnecessary model-input token
+consumption while preserving enough relevant context for the agent to locate and
+understand the code that matters.
+
+Actual tokenization is model/provider-specific, so Sippion does not claim an
+exact provider token count. It uses a local estimated-token target as a soft
+packing goal and an independent byte limit as the hard model-visible output
+guard.
+
 ```text
 MCP / JSON-RPC
       |
