@@ -3,7 +3,56 @@ use super::*;
 const MIN_CONFIDENCE_GAIN_FOR_EXPANSION: f64 = 0.025;
 const MIN_NEW_HITS_PER_MIB: f64 = 0.02;
 
-fn efficiency_confidence(query: &NormalizedQuery, outcome: &SearchOutcome) -> f64 {
+fn normalized_idf_rarity(document_count: usize, document_frequencies: &[usize]) -> f64 {
+    if document_count == 0 || document_frequencies.is_empty() {
+        return 0.0;
+    }
+    let n = document_count as f64;
+    let max_observed_idf = (1.0 + (n - 1.0 + 0.5) / (1.0 + 0.5)).ln().max(f64::EPSILON);
+    document_frequencies
+        .iter()
+        .map(|frequency| {
+            if *frequency == 0 {
+                return 0.0;
+            }
+            let df = (*frequency).min(document_count) as f64;
+            let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+            (idf / max_observed_idf).clamp(0.0, 1.0)
+        })
+        .sum::<f64>()
+        / document_frequencies.len() as f64
+}
+
+fn exact_query_term_coverage(query: &NormalizedQuery, outcome: &SearchOutcome) -> f64 {
+    if query.terms.is_empty() || outcome.hits.is_empty() {
+        return 0.0;
+    }
+    let mut exact = HashSet::<String>::new();
+    for hit in outcome.hits.iter().take(3) {
+        let folded = crate::core::unicode_search_fold(&format!(
+            "{} {}",
+            hit.relative_path, hit.excerpt
+        ));
+        let tokens = crate::core::split_search_tokens(&folded).collect::<HashSet<_>>();
+        for term in &query.terms {
+            if tokens.contains(term.as_str()) {
+                exact.insert(term.clone());
+            }
+        }
+    }
+    exact.len() as f64 / query.terms.len() as f64
+}
+
+fn efficiency_confidence(outcome: &SearchOutcome, specificity: f64) -> f64 {
+    if outcome.hits.is_empty() {
+        return if !outcome.truncated && outcome.coverage.policy_excluded_files == 0 {
+            0.98
+        } else if outcome.coverage.policy_excluded_files > 0 {
+            0.35
+        } else {
+            0.05
+        };
+    }
     let coverage = if outcome.coverage.eligible_files == 0 {
         1.0
     } else {
@@ -17,12 +66,53 @@ fn efficiency_confidence(query: &NormalizedQuery, outcome: &SearchOutcome) -> f6
     } else {
         ((top - second).max(0.0) / top).clamp(0.0, 1.0)
     };
-    let specificity = (1.0 / query.terms.len().max(1) as f64).sqrt();
-    (score_confidence * 0.48 + gap_confidence * 0.22 + coverage * 0.25 + specificity * 0.05)
+    (score_confidence * 0.38
+        + gap_confidence * 0.20
+        + coverage * 0.22
+        + specificity.clamp(0.0, 1.0) * 0.20)
         .clamp(0.0, 1.0)
 }
 
 impl RepositoryAccess {
+    fn query_specificity(
+        &self,
+        query: &NormalizedQuery,
+        outcome: &SearchOutcome,
+    ) -> Result<f64, RepositoryAccessError> {
+        let hashes = query
+            .terms
+            .iter()
+            .map(|term| stable_term_hash(term))
+            .collect::<Vec<_>>();
+        let (document_count, document_frequencies) = {
+            let index = self
+                .ram_index
+                .lock()
+                .map_err(|_| RepositoryAccessError::Io)?;
+            let mut frequencies = vec![0usize; hashes.len()];
+            for document in index.files.values() {
+                for (position, hash) in hashes.iter().enumerate() {
+                    if document
+                        .terms
+                        .binary_search_by_key(hash, |(term_hash, _)| *term_hash)
+                        .is_ok()
+                    {
+                        frequencies[position] = frequencies[position].saturating_add(1);
+                    }
+                }
+            }
+            (index.files.len(), frequencies)
+        };
+        let rarity = normalized_idf_rarity(document_count, &document_frequencies);
+        let exact = exact_query_term_coverage(query, outcome);
+        let corroboration = if query.terms.len() <= 1 {
+            0.0
+        } else {
+            ((query.terms.len() - 1).min(3) as f64 / 3.0) * exact
+        };
+        Ok((rarity * 0.55 + exact * 0.35 + corroboration * 0.10).clamp(0.0, 1.0))
+    }
+
     /// Adaptive retrieval optimized for useful evidence per scanned byte rather than coverage alone.
     ///
     /// The legacy adaptive search remains available for regression tests and compatibility. The
@@ -74,7 +164,8 @@ impl RepositoryAccess {
             total_scanned_files =
                 total_scanned_files.saturating_add(outcome.coverage.scanned_files);
 
-            let confidence = efficiency_confidence(query, &outcome);
+            let specificity = self.query_specificity(query, &outcome)?;
+            let confidence = efficiency_confidence(&outcome, specificity);
             outcome.coverage.scanned_bytes = total_scanned_bytes;
             outcome.coverage.scanned_files = total_scanned_files;
             outcome.coverage.scan_budget_bytes = granted_allowance;
@@ -152,13 +243,8 @@ impl RepositoryAccess {
 mod tests {
     use super::*;
 
-    #[test]
-    fn confidence_rewards_rank_gap_and_coverage() {
-        let query = NormalizedQuery {
-            raw_lower: "token".into(),
-            terms: vec!["token".into()],
-        };
-        let make = |scores: &[f64], indexed: usize| SearchOutcome {
+    fn make(scores: &[f64], indexed: usize) -> SearchOutcome {
+        SearchOutcome {
             hits: scores
                 .iter()
                 .enumerate()
@@ -179,10 +265,30 @@ mod tests {
                 ..SearchCoverage::default()
             },
             adaptive_expandable: true,
+        }
+    }
+
+    #[test]
+    fn confidence_rewards_rank_gap_coverage_and_specificity() {
+        assert!(efficiency_confidence(&make(&[100.0, 10.0], 10), 0.9) > efficiency_confidence(&make(&[40.0, 39.0], 3), 0.2));
+        assert!(efficiency_confidence(&make(&[60.0, 40.0], 8), 0.9) > efficiency_confidence(&make(&[60.0, 40.0], 8), 0.1));
+    }
+
+    #[test]
+    fn idf_rarity_rewards_terms_seen_in_fewer_documents() {
+        let rare = normalized_idf_rarity(100, &[1, 2]);
+        let common = normalized_idf_rarity(100, &[70, 80]);
+        assert!(rare > common);
+    }
+
+    #[test]
+    fn complete_no_match_is_high_confidence_without_specificity_hack() {
+        let outcome = SearchOutcome {
+            hits: Vec::new(),
+            truncated: false,
+            coverage: SearchCoverage::default(),
+            adaptive_expandable: false,
         };
-        assert!(
-            efficiency_confidence(&query, &make(&[100.0, 10.0], 10))
-                > efficiency_confidence(&query, &make(&[40.0, 39.0], 3))
-        );
+        assert!(efficiency_confidence(&outcome, 0.0) > 0.9);
     }
 }
