@@ -41,21 +41,20 @@ jobs:
 
           def replace_once(path, old, new):
               text = read(path)
-              if text.count(old) != 1:
-                  raise SystemExit(f"{path}: expected exactly one match for {old[:60]!r}, found {text.count(old)}")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match for {old[:50]!r}, found {count}")
               write(path, text.replace(old, new, 1))
 
           def replace_between(path, start, end, replacement):
               text = read(path)
               start_i = text.find(start)
-              if start_i < 0:
-                  raise SystemExit(f"{path}: start marker missing: {start!r}")
-              end_i = text.find(end, start_i)
-              if end_i < 0:
-                  raise SystemExit(f"{path}: end marker missing: {end!r}")
+              end_i = text.find(end, start_i + len(start)) if start_i >= 0 else -1
+              if start_i < 0 or end_i < 0:
+                  raise SystemExit(f"{path}: marker replacement failed: {start!r} -> {end!r}")
               write(path, text[:start_i] + replacement + text[end_i:])
 
-          # query --json consumes typed diagnostics directly instead of reparsing CTX/S/E output.
+          # Typed CLI diagnostics: retrieval ranking and packed paths come from the engine directly.
           replace_once(
               "src/main.rs",
               "use crate::core::{\n    MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES,\n    heuristic_v3_estimated_tokens,\n};",
@@ -67,47 +66,35 @@ jobs:
               "fn run_query_command",
               "",
           )
-          replace_once(
+          replace_between(
               "src/main.rs",
-              """    let context = service
-              .context(&normalized, Some(&coordination), None)
-              .map_err(|error| error.user_message().to_string())?;
-          let diagnostic = query_diagnostic(&context);
-          """,
+              "    let context = service\n",
+              "\n    if json_output {",
               """    let result = service
-              .context_result(&normalized, Some(&coordination), None)
-              .map_err(|error| error.user_message().to_string())?;
-          let context = result.model_text;
-          let diagnostic = result.diagnostics;
+                  .context_result(&normalized, Some(&coordination), None)
+                  .map_err(|error| error.user_message().to_string())?;
+              let context = result.model_text;
+              let diagnostic = result.diagnostics;
           """,
           )
-          replace_once(
+          replace_between(
               "src/main.rs",
-              """            diagnostic
-                          .hard_budget_bytes
-                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-                      diagnostic
-                          .target_estimated_tokens
-                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-                      diagnostic
-                          .scanned_bytes
-                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),""",
+              "            diagnostic\n                .hard_budget_bytes",
+              "            diagnostic\n                .ranked_files",
               """            diagnostic.hard_budget_bytes,
                       diagnostic.target_estimated_tokens,
-                      diagnostic.scanned_bytes,""",
+                      diagnostic.scanned_bytes,
+          """,
           )
 
-          # Deterministic semantic expansion scoring. Insert helpers without matching backslash literals.
-          map_helpers = r'''
+          # Deterministic semantic/import expansion.
+          helpers = r'''
           fn expansion_directory_distance(seed_path: &str, candidate_path: &str) -> usize {
               let seed = seed_path.replace('\\', "/");
               let candidate = candidate_path.replace('\\', "/");
               let seed_dir = seed.rsplit_once('/').map_or("", |(dir, _)| dir);
               let candidate_dir = candidate.rsplit_once('/').map_or("", |(dir, _)| dir);
-              let seed_parts = seed_dir
-                  .split('/')
-                  .filter(|part| !part.is_empty())
-                  .collect::<Vec<_>>();
+              let seed_parts = seed_dir.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
               let candidate_parts = candidate_dir
                   .split('/')
                   .filter(|part| !part.is_empty())
@@ -147,12 +134,7 @@ jobs:
           ) -> Vec<(String, f64)> {
               let mut ranked = paths
                   .iter()
-                  .map(|path| {
-                      (
-                          path.clone(),
-                          expansion_path_score(seed_path, path, base, exact_module),
-                      )
-                  })
+                  .map(|path| (path.clone(), expansion_path_score(seed_path, path, base, exact_module)))
                   .collect::<Vec<_>>();
               ranked.sort_by(|(left_path, left_score), (right_path, right_score)| {
                   right_score
@@ -165,7 +147,7 @@ jobs:
           }
 
           '''
-          replace_once("src/repo/map.rs", "fn ranked_symbols(\n", map_helpers + "fn ranked_symbols(\n")
+          replace_once("src/repo/map.rs", "fn ranked_symbols(\n", helpers + "fn ranked_symbols(\n")
           replace_once(
               "src/repo/map.rs",
               """        let mut by_stem = HashMap::<String, Vec<String>>::new();
@@ -275,15 +257,17 @@ jobs:
                       ranked.first().map(|(path, _)| path.as_str()),
                       Some("src/dependency.rs")
                   );
-                  let reranked = ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3);
-                  assert_eq!(ranked, reranked);
+                  assert_eq!(
+                      ranked,
+                      ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3)
+                  );
               }
 
               #[test]
               fn import_neighbor_can_enter_structure_without_lexical_query_match() {""",
           )
 
-          # Product purpose and architecture documentation.
+          # Documentation and evaluation contracts.
           replace_once(
               "README.md",
               """Sippion is a local, read-only MCP server that helps AI coding agents find the
