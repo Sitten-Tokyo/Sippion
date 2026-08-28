@@ -10,17 +10,59 @@ struct BuiltMapCandidate {
     redaction_truncated: bool,
 }
 
+fn strip_relative_module_prefixes(mut value: String) -> String {
+    while value.starts_with("./") || value.starts_with("../") {
+        value = value
+            .strip_prefix("./")
+            .or_else(|| value.strip_prefix("../"))
+            .unwrap_or(&value)
+            .to_string();
+    }
+    value
+}
+
+fn normalized_slash_module(value: &str, strip_source_extension: bool) -> String {
+    let mut normalized =
+        strip_relative_module_prefixes(crate::core::unicode_search_fold(value).replace('\\', "/"));
+    if strip_source_extension {
+        let known_extension = Path::new(&normalized)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension,
+                    "js" | "jsx"
+                        | "mjs"
+                        | "cjs"
+                        | "ts"
+                        | "tsx"
+                        | "mts"
+                        | "cts"
+                        | "c"
+                        | "cc"
+                        | "cpp"
+                        | "cxx"
+                        | "h"
+                        | "hh"
+                        | "hpp"
+                        | "hxx"
+                )
+            });
+        if known_extension {
+            normalized = Path::new(&normalized)
+                .with_extension("")
+                .to_string_lossy()
+                .replace('\\', "/");
+        }
+    }
+    normalized.trim_matches('/').to_string()
+}
+
 fn normalized_module_name(value: &str) -> String {
     let mut normalized = crate::core::unicode_search_fold(value)
         .replace("::", "/")
         .replace(['.', '\\'], "/");
-    while normalized.starts_with("./") || normalized.starts_with("../") {
-        normalized = normalized
-            .strip_prefix("./")
-            .or_else(|| normalized.strip_prefix("../"))
-            .unwrap_or(&normalized)
-            .to_string();
-    }
+    normalized = normalized.trim_matches('/').to_string();
     for prefix in ["crate/", "self/", "super/"] {
         normalized = normalized
             .strip_prefix(prefix)
@@ -28,6 +70,20 @@ fn normalized_module_name(value: &str) -> String {
             .to_string();
     }
     normalized.trim_matches('/').to_string()
+}
+
+fn normalized_import_module(seed_path: &str, value: &str) -> String {
+    let extension = Path::new(seed_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" | "c" | "cc" | "cpp"
+        | "cxx" | "h" | "hh" | "hpp" | "hxx" => normalized_slash_module(value, true),
+        "go" => normalized_slash_module(value, false),
+        _ => normalized_module_name(value),
+    }
 }
 
 fn normalized_path_module(path: &str) -> String {
@@ -39,8 +95,71 @@ fn normalized_path_module(path: &str) -> String {
     no_ext
         .trim_end_matches("/mod")
         .trim_end_matches("/index")
+        .trim_end_matches("/__init__")
         .trim_matches('/')
         .to_string()
+}
+
+fn module_aliases_for_path(path: &str) -> Vec<String> {
+    let module = normalized_path_module(path);
+    if module.is_empty() {
+        return Vec::new();
+    }
+    let mut bases = vec![module.clone()];
+    if let Some((parent, _)) = module.rsplit_once('/') {
+        if !parent.is_empty() {
+            bases.push(parent.to_string());
+        }
+    }
+    let mut aliases = Vec::new();
+    for base in bases {
+        let segments = base
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        for start in segments.len().saturating_sub(4)..segments.len() {
+            let alias = segments[start..].join("/");
+            if alias.len() >= 2 {
+                aliases.push(alias);
+            }
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn content_keyed_analysis_path(path: &str, safe_source: &str) -> String {
+    let fingerprint = source_content_fingerprint(safe_source);
+    let source_path = Path::new(path);
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source");
+    let parent = source_path
+        .parent()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let keyed_name = if extension.is_empty() {
+        format!(
+            "{stem}.__sippion_{:016x}{:016x}",
+            fingerprint.0, fingerprint.1
+        )
+    } else {
+        format!(
+            "{stem}.__sippion_{:016x}{:016x}.{extension}",
+            fingerprint.0, fingerprint.1
+        )
+    };
+    if parent.is_empty() {
+        keyed_name
+    } else {
+        format!("{parent}/{keyed_name}")
+    }
 }
 
 fn expansion_directory_distance(seed_path: &str, candidate_path: &str) -> usize {
@@ -264,8 +383,6 @@ impl RepositoryAccess {
             .windows_map_serial
             .lock()
             .map_err(|_| RepositoryAccessError::Io)?;
-        #[cfg(windows)]
-        self.reset_structural_caches()?;
 
         let mut truncated = false;
         let mut candidates = Vec::<MapCandidate>::new();
@@ -410,7 +527,13 @@ impl RepositoryAccess {
             candidates
                 .iter()
                 .map(|candidate| GraphCacheNode {
-                    path: candidate.relative_path.clone(),
+                    // Graph reuse is content-keyed as well as stamp-keyed. This is required on
+                    // Windows, where an in-place same-size/same-mtime rewrite can preserve the
+                    // metadata identity visible to the stable API.
+                    path: content_keyed_analysis_path(
+                        &candidate.relative_path,
+                        &candidate.source_lower,
+                    ),
                     stamp: candidate.stamp.clone(),
                 })
                 .collect(),
@@ -460,26 +583,24 @@ impl RepositoryAccess {
                 }
 
                 for import_path in &candidate.semantics.import_paths {
-                    let import_lower = crate::core::unicode_search_fold(import_path);
+                    let import_module =
+                        normalized_import_module(&candidate.relative_path, import_path);
+                    if import_module.is_empty() {
+                        continue;
+                    }
                     for (to, target) in candidates.iter().enumerate() {
                         if to == from {
                             continue;
                         }
-                        let path = crate::core::unicode_search_fold(&target.relative_path);
-                        let stem = Path::new(&path)
-                            .file_stem()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or("");
-                        let path_no_ext = Path::new(&path)
-                            .with_extension("")
-                            .to_string_lossy()
-                            .replace('\\', "/");
-                        let module_path = path_no_ext.trim_end_matches("/mod");
-                        if (!stem.is_empty() && import_lower.ends_with(stem))
-                            || (!module_path.is_empty()
-                                && (import_lower.ends_with(module_path)
-                                    || module_path.ends_with(import_lower.as_str())))
-                        {
+                        let matched =
+                            module_aliases_for_path(&target.relative_path)
+                                .iter()
+                                .any(|alias| {
+                                    import_module == *alias
+                                        || import_module.ends_with(&format!("/{alias}"))
+                                        || alias.ends_with(&format!("/{import_module}"))
+                                });
+                        if matched {
                             upsert_repo_edge(&mut edge_maps, from, to, 0.40, "import");
                         }
                     }
@@ -677,8 +798,12 @@ impl RepositoryAccess {
         let redaction_truncated = redaction.truncated;
         let redacted_bytes = redaction.text.len();
         let safe = redaction.text;
+        // The source was verified and read before this point. Key structural analysis by a
+        // content fingerprint while preserving the source extension used for language selection.
+        // This permits safe cross-request analysis reuse even on Windows without trusting mtime.
+        let analysis_path = content_keyed_analysis_path(path, &safe);
         let Some(analysis) = self.analyze_source_cached(
-            path,
+            &analysis_path,
             &safe,
             &source.stamp,
             cancellation,
@@ -740,8 +865,7 @@ impl RepositoryAccess {
             if existing.contains(path.as_str()) {
                 continue;
             }
-            let module = normalized_path_module(path);
-            if !module.is_empty() {
+            for module in module_aliases_for_path(path) {
                 by_module.entry(module).or_default().push(path.clone());
             }
             if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
@@ -769,7 +893,7 @@ impl RepositoryAccess {
                 .iter()
                 .take(MAX_EXPANSION_IMPORTS_PER_SEED)
             {
-                let module = normalized_module_name(import);
+                let module = normalized_import_module(&seed.relative_path, import);
                 if module.is_empty() {
                     continue;
                 }
@@ -838,6 +962,47 @@ mod optimized_tests {
             ranked,
             ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3)
         );
+    }
+
+    #[test]
+    fn language_aware_import_normalization_preserves_package_semantics() {
+        assert_eq!(
+            normalized_import_module("src/app.ts", "./dependency.ts"),
+            "dependency"
+        );
+        assert_eq!(
+            normalized_import_module("cmd/main.go", "github.com/acme/pkg"),
+            "github.com/acme/pkg"
+        );
+        assert_eq!(
+            normalized_import_module("src/main.rs", "crate::service::engine"),
+            "service/engine"
+        );
+        assert_eq!(
+            normalized_import_module("src/app.py", "package.module"),
+            "package/module"
+        );
+    }
+
+    #[test]
+    fn module_aliases_cover_source_roots_and_package_directories() {
+        let aliases = module_aliases_for_path("src/main/java/com/example/Foo.java");
+        assert!(aliases.iter().any(|alias| alias == "com/example/foo"));
+        assert!(aliases.iter().any(|alias| alias == "com/example"));
+        assert!(
+            module_aliases_for_path("src/dependency.ts")
+                .iter()
+                .any(|alias| alias == "dependency")
+        );
+    }
+
+    #[test]
+    fn structural_cache_key_changes_with_content_and_preserves_extension() {
+        let first = content_keyed_analysis_path("src/main.rs", "fn first() {}");
+        let second = content_keyed_analysis_path("src/main.rs", "fn second() {}");
+        assert_ne!(first, second);
+        assert!(first.ends_with(".rs"));
+        assert!(second.ends_with(".rs"));
     }
 
     #[test]

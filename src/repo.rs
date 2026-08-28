@@ -428,9 +428,9 @@ pub struct RepositoryAccess {
     // Serialize those searches so one request cannot clear another request's in-progress index.
     #[cfg(windows)]
     windows_search_serial: Mutex<()>,
-    // The same metadata limitation applies to the structural analysis and graph caches. Serialize
-    // top-level map construction before discarding those cross-request caches on Windows so a
-    // same-size/same-mtime replacement can never reuse stale structural facts.
+    // Structural source is re-read on Windows and analysis/graph cache keys include a content
+    // fingerprint. Serialize top-level map construction so those verified caches can be reused
+    // across requests without stale same-size/same-mtime replacements racing one another.
     #[cfg(windows)]
     windows_map_serial: Mutex<()>,
     // File-level single-flight prevents concurrent cold-start queries from reading/indexing the

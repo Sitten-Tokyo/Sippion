@@ -125,7 +125,11 @@ fn evidence_atom(
 ) -> ContextAtom {
     let body = framed_evidence_body(&excerpt.body);
     let mut text = if excerpt.start_line == 0 && excerpt.end_line == 0 {
-        format!("E path={} body_b={}\n", escaped(&excerpt.path), excerpt.body.len())
+        format!(
+            "E path={} body_b={}\n",
+            escaped(&excerpt.path),
+            excerpt.body.len()
+        )
     } else {
         format!(
             "E path={} lines={}-{} body_b={}\n",
@@ -383,11 +387,25 @@ mod tests {
         };
         let packed = pack_context(&query(), &[], &excerpts, "", &coverage);
         assert_eq!(
-            packed.text.lines().filter(|line| line.starts_with("CTX ")).count(),
+            packed
+                .text
+                .lines()
+                .filter(|line| line.starts_with("CTX "))
+                .count(),
             1
         );
-        assert!(!packed.text.lines().any(|line| line.starts_with("S path=\"trusted.rs\"")));
-        assert!(!packed.text.lines().any(|line| line.starts_with("E path=\"fake.rs\"")));
+        assert!(
+            !packed
+                .text
+                .lines()
+                .any(|line| line.starts_with("S path=\"trusted.rs\""))
+        );
+        assert!(
+            !packed
+                .text
+                .lines()
+                .any(|line| line.starts_with("E path=\"fake.rs\""))
+        );
         assert!(packed.text.contains("| CTX v=4 confidence=1.000"));
         assert!(packed.text.contains("| S path=\"trusted.rs\" rank=999"));
         assert!(packed.text.contains("| E path=\"fake.rs\""));
