@@ -5,7 +5,7 @@
 Sippion is a local, read-only MCP server that helps AI coding agents find the
 right parts of a repository before they start opening source files broadly.
 
-It exposes one tool, `repo_context`, which combines bounded lexical search,
+Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,
 structural context, and source-only semantic ranking to return a small,
 relevant set of code excerpts.
 

@@ -6,6 +6,13 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 
 ### Added
 
+- Retrieval evaluation with Recall@5/MRR and model-visible byte/token regression gates.
+- Opt-in `query`, `inspect`, and machine-readable/verbose Doctor diagnostics without expanding `repo_context`.
+- Black-box MCP conformance checks using the official MCP client implementation.
+- Per-platform MCPB release packaging, generated `server.json`, and post-release Official MCP Registry publication via GitHub OIDC.
+
+### Added
+
 - Bounded Tree-sitter and source-only semantic support for Java, C#, C, and C++ in addition to Rust, Python, JavaScript/TypeScript, and Go.
 - CycloneDX JSON SBOM generation as a checksummed, provenance-attested release asset with post-publication verification.
 - Top-level contributor and security-reporting guidance.

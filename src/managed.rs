@@ -26,10 +26,10 @@ pub(crate) fn run_setup() -> Result<(), String> {
     crate::setup::run_setup()
 }
 
-pub(crate) fn run_doctor() -> Result<(), String> {
+pub(crate) fn run_doctor(json_output: bool, verbose: bool) -> Result<(), String> {
     let home = home_dir()?;
     validate_managed_parent_boundaries(&home)?;
-    crate::setup::run_doctor()
+    crate::setup::run_doctor(json_output, verbose)
 }
 
 pub(crate) fn run_uninstall() -> Result<(), String> {

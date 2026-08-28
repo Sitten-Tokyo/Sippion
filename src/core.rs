@@ -8,6 +8,18 @@ use unicode_normalization::char::{decompose_compatible, is_combining_mark};
 pub const PRODUCT_NAME: &str = "Sippion";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_QUERY_BYTES: usize = 512;
+pub const SUPPORTED_LANGUAGE_NAMES: &[&str] = &[
+    "Rust",
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "Go",
+    "Java",
+    "C#",
+    "C",
+    "C++",
+];
+pub const MODEL_VISIBLE_CONTEXT_HARD_BYTES: &[usize] = &[8 * 1024, 16 * 1024, 24 * 1024, 32 * 1024];
 pub const MAX_COORDINATION_ID_BYTES: usize = 96;
 pub const MIN_QUERY_TERMS: usize = 1;
 pub const MAX_QUERY_TERMS: usize = 8;
@@ -211,9 +223,15 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
 #[must_use]
 pub fn capability_registry() -> Value {
     json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "agent": "sippion",
         "trustLabels": ["local-only", "read-only", "no-network", "project-scoped"],
+        "supportedLanguages": SUPPORTED_LANGUAGE_NAMES,
+        "modelVisibleContext": {
+            "adaptiveHardBytes": MODEL_VISIBLE_CONTEXT_HARD_BYTES,
+            "diagnosticsInToolOutput": false,
+            "diagnosticsSurface": "local CLI only"
+        },
         "capabilities": [
             {
                 "id": "repository.context",

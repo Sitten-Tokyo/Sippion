@@ -1,0 +1,13 @@
+{
+  "minRecallAt5": 1.0,
+  "minMrr": 1.0,
+  "maxAverageEstimatedTokens": 2100,
+  "cases": [
+    {"name":"rust-auth","query":"validate_session_token","expectedPaths":["src/auth.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"python-router","query":"RouteDispatcher","expectedPaths":["python/router.py"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"java-account","query":"JavaAccountService","expectedPaths":["java/AccountService.java"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"csharp-token","query":"CSharpTokenValidator","expectedPaths":["csharp/TokenValidator.cs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"c-packet","query":"normalize_packet_header","expectedPaths":["c/packet.c"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"cpp-cache","query":"native_cache_probe","expectedPaths":["cpp/cache.cpp"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100}
+  ]
+}
