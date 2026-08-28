@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Calibrate Sippion's local token estimator against real provider observations.
+"""Calibrate Sippion's canonical local token estimator against real provider observations.
 
 Input is JSON with an `observations` array. Each observation must contain:
   - `text`: exact model-visible text that was tokenized
   - `observedTokens`: authoritative token count from the target provider/model
   - optional `label`: human-readable source name
 
-No provider counts are fabricated by this script. Maintainers collect them from the
-provider/model they want to validate, then run this tool locally or in a trusted CI job.
+No provider counts are fabricated by this script. The estimate is obtained from the
+Sippion binary's `estimate-tokens` command so runtime, evaluation, and calibration share
+one implementation.
 """
 
 import argparse
 import json
-import math
 import statistics
+import subprocess
 from pathlib import Path
 
 
-def sippion_estimate(text: str) -> int:
-    if not text:
-        return 0
-    encoded_bytes = len(text.encode("utf-8"))
-    non_ascii = sum(1 for ch in text if not ch.isascii())
-    return math.ceil((encoded_bytes + non_ascii * 2) / 3)
+def sippion_estimate(binary: str, text: str) -> int:
+    proc = subprocess.run(
+        [binary, "estimate-tokens", "--json"],
+        input=text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"canonical token estimator failed: {proc.stderr.strip()}")
+    return int(json.loads(proc.stdout)["estimatedTokens"])
 
 
 def percentile(values, p):
@@ -39,6 +46,7 @@ def percentile(values, p):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("observations", help="JSON file containing real tokenizer observations")
+    parser.add_argument("--binary", default="target/release/sippion")
     parser.add_argument(
         "--max-p95-relative-error",
         type=float,
@@ -69,7 +77,7 @@ def main():
             raise SystemExit(
                 f"observation {index} requires string text and positive integer observedTokens"
             )
-        estimate = sippion_estimate(text)
+        estimate = sippion_estimate(args.binary, text)
         ratio = observed / max(estimate, 1)
         relative_error = (estimate - observed) / observed
         if estimate < observed:
@@ -94,6 +102,7 @@ def main():
     summary = {
         "model": payload.get("model"),
         "tokenizer": payload.get("tokenizer"),
+        "estimator": "sippion heuristic-v3 via estimate-tokens CLI",
         "observations": len(rows),
         "meanAbsoluteRelativeError": round(statistics.fmean(absolute_relative_errors), 4),
         "p95AbsoluteRelativeError": round(p95_error, 4),
