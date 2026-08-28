@@ -84,24 +84,48 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      - name: Run fixture retrieval quality and context budget evaluation
+      - name: Validate evaluation tooling syntax
+        if: runner.os == 'Linux'
+        run: python3 -m py_compile scripts/retrieval-eval.py scripts/token-calibration.py scripts/tune-context.py
+
+      - name: Run fixture retrieval quality and evidence evaluation
         if: runner.os == 'Linux'
         run: python3 scripts/retrieval-eval.py --binary target/release/sippion
 
-      - name: Run self-hosted token efficiency evaluation
+      - name: Run self-hosted training evaluation
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          self_root="$RUNNER_TEMP/sippion-self-eval"
-          rm -rf "$self_root"
-          mkdir -p "$self_root"
-          cp -R src "$self_root/src"
+          train_root="$RUNNER_TEMP/sippion-self-train"
+          rm -rf "$train_root"
+          mkdir -p "$train_root"
+          cp -R src "$train_root/src"
           python3 scripts/retrieval-eval.py \
             --binary target/release/sippion \
-            --cases eval/self_cases.json \
-            --fixture "$self_root" \
-            --baseline-root "$self_root"
+            --cases eval/self_train_cases.json \
+            --fixture "$train_root" \
+            --baseline-root "$train_root"
+
+      - name: Run whole-repository holdout evaluation
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          holdout_root="$RUNNER_TEMP/sippion-self-holdout"
+          rm -rf "$holdout_root"
+          mkdir -p "$holdout_root"
+          tar \
+            --exclude='./.git' \
+            --exclude='./target' \
+            --exclude='./eval' \
+            --exclude='./node_modules' \
+            -cf - . | tar -xf - -C "$holdout_root"
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_holdout_cases.json \
+            --fixture "$holdout_root" \
+            --baseline-root "$holdout_root"
 
       - name: Set up pinned Node.js for official MCP client and MCPB tooling
         if: runner.os == 'Linux'
