@@ -208,7 +208,7 @@ fn query_schema() -> Value {
 pub fn mcp_tool_definition() -> Value {
     json!({
         "name": "repo_context",
-        "description": "Single adaptive repository-context tool. Internally combines a RAM-only incremental lexical index, BM25, path/session-agent ranking, bounded shared Tree-sitter + source-only semantic analysis, a cached weighted structural graph, cross-agent diversity, deduplication, excerpt extraction, conservative compaction, and adaptive context packing.",
+        "description": "Find and pack small, relevant repository context for an AI coding task. Local, read-only, bounded, and token-aware.",
         "annotations": {"readOnlyHint": true, "openWorldHint": false},
         "inputSchema": query_schema(),
         "_meta": {"io.sippion/capability": "repository.context"}
@@ -259,8 +259,8 @@ pub fn capability_registry() -> Value {
                 "outputOptimizer": [
                     "deduplication",
                     "excerpt extraction",
-                    "RTK-style compression",
-                    "Repomix-style packing"
+                    "conservative source compaction",
+                    "utility-per-token context packing"
                 ],
                 "returnFormat": "ranked structural summary plus bounded multi-file evidence pack"
             }
