@@ -90,12 +90,18 @@ jobs:
 
       - name: Run self-hosted token efficiency evaluation
         if: runner.os == 'Linux'
+        shell: bash
         run: |
+          set -euo pipefail
+          self_root="$RUNNER_TEMP/sippion-self-eval"
+          rm -rf "$self_root"
+          mkdir -p "$self_root"
+          cp -R src "$self_root/src"
           python3 scripts/retrieval-eval.py \
             --binary target/release/sippion \
             --cases eval/self_cases.json \
-            --fixture . \
-            --baseline-root .
+            --fixture "$self_root" \
+            --baseline-root "$self_root"
 
       - name: Set up pinned Node.js for official MCP client and MCPB tooling
         if: runner.os == 'Linux'
