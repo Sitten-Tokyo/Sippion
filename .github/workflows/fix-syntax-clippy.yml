@@ -26,19 +26,17 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           path = Path("src/syntax.rs")
-          text = path.read_text()
-          old = '''        "constructor_declaration"
-        | "local_function_statement"
-        | "function_definition"
-        | "function_declarator" => Some("function"),
-'''
-          new = '''        "constructor_declaration"
-        | "local_function_statement"
-        | "function_declarator" => Some("function"),
-'''
-          if old not in text:
-              raise SystemExit("expected duplicate match block not found")
-          path.write_text(text.replace(old, new, 1))
+          lines = path.read_text().splitlines()
+          removed = 0
+          out = []
+          for line in lines:
+              if line.strip() == '| "function_definition"':
+                  removed += 1
+                  continue
+              out.append(line)
+          if removed != 1:
+              raise SystemExit(f"expected exactly one duplicate line, removed={removed}")
+          path.write_text("\n".join(out) + "\n")
           PY
           cargo fmt --check
 
