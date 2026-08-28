@@ -31,7 +31,7 @@ jobs:
           text = text.replace("'''          release-assets/install.sh", "'''            release-assets/install.sh")
           text = text.replace("\n          release-assets/install.ps1\n'''", "\n            release-assets/install.ps1\n'''")
           text = text.replace("\n          release-assets/sippion.cdx.json\n'''", "\n            release-assets/sippion.cdx.json\n'''")
-          text = text.replace("\n        for binary in \\\n", "\n          for binary in \\\n")
+          text = text.replace("\n        for binary in ", "\n          for binary in ")
           text = text.replace("\n        gh attestation verify \"published/sippion.cdx.json\"", "\n          gh attestation verify \"published/sippion.cdx.json\"")
           path.write_text(text)
           PY
@@ -46,36 +46,65 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           path = Path(".github/workflows/release-supply-chain-smoke.yml")
-          text = path.read_text()
-          release_ref = "$" + "{{ steps.release.outputs.tag }}"
-          event_ref = "$" + "{{ github.event_name }}"
-          text = text.replace(
-              f"        env:\n          RELEASE_TAG: {release_ref}\n        shell: bash\n",
-              f"        env:\n          RELEASE_TAG: {release_ref}\n          EVENT_NAME: {event_ref}\n        shell: bash\n",
-              1,
-          )
-          text = text.replace(
-              "            sippion.cdx.json\n            sippion.cdx.json.sha256\n",
-              "",
-              1,
-          )
-          text = text.replace(
-              "          )\n          for asset in \"${expected[@]}\"; do\n",
-              "          )\n          if [ \"$EVENT_NAME\" = \"release\" ] || [ \"$EVENT_NAME\" = \"workflow_run\" ]; then\n            expected+=(sippion.cdx.json sippion.cdx.json.sha256)\n          fi\n          for asset in \"${expected[@]}\"; do\n",
-              1,
-          )
-          text = text.replace("            sippion.cdx.json.sha256 \\\n", "", 1)
-          text = text.replace(
-              "          done\n\n      - name: Verify every published provenance attestation\n",
-              "          done\n          if [ -f sippion.cdx.json.sha256 ]; then\n            sha256sum -c sippion.cdx.json.sha256\n          fi\n\n      - name: Verify every published provenance attestation\n",
-              1,
-          )
-          text = text.replace(
-              "          gh attestation verify \"published/sippion.cdx.json\" \\\n          --repo \"$REPOSITORY\" \\\n          --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n          --source-digest \"$RELEASE_SHA\" >/dev/null\n",
-              "        if [ -f published/sippion.cdx.json ]; then\n          gh attestation verify \"published/sippion.cdx.json\" \\\n            --repo \"$REPOSITORY\" \\\n            --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n            --source-digest \"$RELEASE_SHA\" >/dev/null\n        fi\n",
-              1,
-          )
-          path.write_text(text)
+          lines = path.read_text().splitlines()
+          out = []
+          in_expected = False
+          in_checksum = False
+          skip_sbom_attestation = 0
+          inserted_event = False
+          inserted_conditional = False
+          inserted_optional_checksum = False
+          event_expr = "$" + "{{ github.event_name }}"
+          for line in lines:
+              stripped = line.strip()
+              if skip_sbom_attestation:
+                  skip_sbom_attestation -= 1
+                  continue
+              if 'gh attestation verify "published/sippion.cdx.json"' in line:
+                  out.extend([
+                      "        if [ -f published/sippion.cdx.json ]; then",
+                      "          gh attestation verify \"published/sippion.cdx.json\" \\",
+                      "            --repo \"$REPOSITORY\" \\",
+                      "            --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\",
+                      "            --source-digest \"$RELEASE_SHA\" >/dev/null",
+                      "        fi",
+                  ])
+                  skip_sbom_attestation = 3
+                  continue
+              if stripped == "expected=(":
+                  in_expected = True
+              elif in_expected and stripped == ")":
+                  in_expected = False
+              if in_expected and stripped in {"sippion.cdx.json", "sippion.cdx.json.sha256"}:
+                  continue
+              if stripped == "- name: Verify every published checksum":
+                  in_checksum = True
+              elif stripped == "- name: Verify every published provenance attestation":
+                  if not inserted_optional_checksum:
+                      out.extend([
+                          "          if [ -f sippion.cdx.json.sha256 ]; then",
+                          "            sha256sum -c sippion.cdx.json.sha256",
+                          "          fi",
+                          "",
+                      ])
+                      inserted_optional_checksum = True
+                  in_checksum = False
+              if in_checksum and stripped.startswith("sippion.cdx.json.sha256"):
+                  continue
+              out.append(line)
+              if stripped.startswith("RELEASE_TAG:") and not inserted_event:
+                  out.append(f"          EVENT_NAME: {event_expr}")
+                  inserted_event = True
+              if stripped == ")" and not in_expected and not inserted_conditional and any("expected=(" in previous for previous in out[-30:]):
+                  out.extend([
+                      "          if [ \"$EVENT_NAME\" = \"release\" ] || [ \"$EVENT_NAME\" = \"workflow_run\" ]; then",
+                      "            expected+=(sippion.cdx.json sippion.cdx.json.sha256)",
+                      "          fi",
+                  ])
+                  inserted_conditional = True
+          if not all([inserted_event, inserted_conditional, inserted_optional_checksum]):
+              raise SystemExit("failed to apply SBOM compatibility transformation")
+          path.write_text("\n".join(out) + "\n")
           PY
 
       - name: Format and validate Rust changes
