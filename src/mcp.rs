@@ -14,6 +14,11 @@ use serde_json::{Value, json};
 
 const MODERN_MCP_VERSION: &str = "2026-07-28";
 const LEGACY_MCP_VERSION: &str = "2025-11-25";
+
+#[must_use]
+pub(crate) fn supported_protocol_versions() -> [&'static str; 2] {
+    [MODERN_MCP_VERSION, LEGACY_MCP_VERSION]
+}
 const MAX_MCP_REQUEST_BYTES: usize = 256 * 1024;
 const STATIC_CACHE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 const MAX_INFLIGHT_TOOL_CALLS: usize = 4;

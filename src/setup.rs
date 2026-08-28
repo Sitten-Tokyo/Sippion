@@ -38,6 +38,22 @@ impl CheckStatus {
     fn is_ok(self) -> bool {
         self == Self::Ok
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Missing => "missing",
+            Self::Mismatch => "mismatch",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DoctorCheck {
+    label: &'static str,
+    path: PathBuf,
+    status: CheckStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,21 +140,80 @@ pub fn run_setup() -> Result<(), String> {
     }
 }
 
-pub fn run_doctor() -> Result<(), String> {
+pub fn run_doctor(json_output: bool, verbose: bool) -> Result<(), String> {
     let executable = installed_executable()?;
     let home = home_dir()?;
-    println!("Sippion {}", crate::core::VERSION);
-    println!("binary: {}", executable.display());
-    println!();
-    let statuses = [
-        check_codex(&home, &executable),
-        check_claude(&home, &executable),
-        check_antigravity(&home, &executable),
-        check_rule(&home.join(".codex").join("AGENTS.md"), "Codex"),
-        check_rule(&home.join(".claude").join("CLAUDE.md"), "Claude Code"),
-        check_rule(&home.join(".gemini").join("GEMINI.md"), "Antigravity"),
+    let checks = vec![
+        DoctorCheck {
+            label: "Codex MCP config",
+            path: home.join(".codex").join("config.toml"),
+            status: check_codex(&home, &executable),
+        },
+        DoctorCheck {
+            label: "Claude Code MCP config",
+            path: home.join(".claude.json"),
+            status: check_claude(&home, &executable),
+        },
+        DoctorCheck {
+            label: "Antigravity MCP config",
+            path: home.join(".gemini").join("config").join("mcp_config.json"),
+            status: check_antigravity(&home, &executable),
+        },
+        DoctorCheck {
+            label: "Codex global rule",
+            path: home.join(".codex").join("AGENTS.md"),
+            status: check_rule(&home.join(".codex").join("AGENTS.md")),
+        },
+        DoctorCheck {
+            label: "Claude Code global rule",
+            path: home.join(".claude").join("CLAUDE.md"),
+            status: check_rule(&home.join(".claude").join("CLAUDE.md")),
+        },
+        DoctorCheck {
+            label: "Antigravity global rule",
+            path: home.join(".gemini").join("GEMINI.md"),
+            status: check_rule(&home.join(".gemini").join("GEMINI.md")),
+        },
     ];
-    let failures = statuses.iter().filter(|status| !status.is_ok()).count();
+    let failures = checks.iter().filter(|check| !check.status.is_ok()).count();
+
+    if json_output {
+        let checks_json = checks
+            .iter()
+            .map(|check| {
+                json!({
+                    "name": check.label,
+                    "status": check.status.as_str(),
+                    "path": check.path.to_string_lossy(),
+                })
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "version": crate::core::VERSION,
+                "binary": executable.to_string_lossy(),
+                "ok": failures == 0,
+                "checks": checks_json,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("Sippion {}", crate::core::VERSION);
+        println!("binary: {}", executable.display());
+        println!();
+        for check in &checks {
+            println!(
+                "{}: {}",
+                check.label,
+                check.status.as_str().to_ascii_uppercase()
+            );
+            if verbose {
+                println!("  path: {}", check.path.display());
+            }
+        }
+    }
+
     if failures == 0 {
         Ok(())
     } else {
@@ -922,11 +997,9 @@ fn check_codex(home: &Path, executable: &Path) -> CheckStatus {
             if (contents.contains(MANAGED_BEGIN) || contents.contains(MANAGED_END))
                 && managed_block_range(&contents, MANAGED_BEGIN, MANAGED_END).is_err()
             {
-                println!("Codex MCP config: ERROR (malformed Sippion managed markers)");
                 return CheckStatus::Error;
             }
             let Some(start) = find_codex_table_start(&contents) else {
-                println!("Codex MCP config: MISSING");
                 return CheckStatus::Missing;
             };
             let end = find_next_toml_table(&contents, start).unwrap_or(contents.len());
@@ -937,21 +1010,14 @@ fn check_codex(home: &Path, executable: &Path) -> CheckStatus {
                 && section.contains(ROOT_AUTO_TOML_ARGS)
                 && section.contains("cwd = \".\"")
                 && section.contains("enabled_tools = [\"repo_context\"]");
-            println!("Codex MCP config: {}", if ok { "OK" } else { "MISMATCH" });
             if ok {
                 CheckStatus::Ok
             } else {
                 CheckStatus::Mismatch
             }
         }
-        Ok(None) => {
-            println!("Codex MCP config: MISSING");
-            CheckStatus::Missing
-        }
-        Err(error) => {
-            println!("Codex MCP config: ERROR ({error})");
-            CheckStatus::Error
-        }
+        Ok(None) => CheckStatus::Missing,
+        Err(_) => CheckStatus::Error,
     }
 }
 
@@ -973,7 +1039,7 @@ fn check_antigravity(home: &Path, executable: &Path) -> CheckStatus {
     )
 }
 
-fn check_json_server(path: &Path, executable: &Path, label: &str, claude: bool) -> CheckStatus {
+fn check_json_server(path: &Path, executable: &Path, _label: &str, claude: bool) -> CheckStatus {
     match read_optional_json(path) {
         Ok(Some(root)) => {
             let entry = root
@@ -981,7 +1047,6 @@ fn check_json_server(path: &Path, executable: &Path, label: &str, claude: bool) 
                 .and_then(Value::as_object)
                 .and_then(|servers| servers.get(SERVER_NAME));
             if entry.is_none() {
-                println!("{label}: MISSING");
                 return CheckStatus::Missing;
             }
             let command = entry
@@ -996,26 +1061,19 @@ fn check_json_server(path: &Path, executable: &Path, label: &str, claude: bool) 
             let ok = command == Some(expected.as_str())
                 && type_ok
                 && entry.is_some_and(is_current_sippion_json_entry);
-            println!("{label}: {}", if ok { "OK" } else { "MISMATCH" });
             if ok {
                 CheckStatus::Ok
             } else {
                 CheckStatus::Mismatch
             }
         }
-        Ok(None) => {
-            println!("{label}: MISSING");
-            CheckStatus::Missing
-        }
-        Err(error) => {
-            println!("{label}: ERROR ({error})");
-            CheckStatus::Error
-        }
+        Ok(None) => CheckStatus::Missing,
+        Err(_) => CheckStatus::Error,
     }
 }
 
-fn check_rule(path: &Path, label: &str) -> CheckStatus {
-    let status = match read_optional_text(path) {
+fn check_rule(path: &Path) -> CheckStatus {
+    match read_optional_text(path) {
         Ok(Some(contents)) => match managed_block_range(&contents, RULE_BEGIN, RULE_END) {
             Ok(Some(_)) => CheckStatus::Ok,
             Ok(None) => CheckStatus::Missing,
@@ -1023,15 +1081,7 @@ fn check_rule(path: &Path, label: &str) -> CheckStatus {
         },
         Ok(None) => CheckStatus::Missing,
         Err(_) => CheckStatus::Error,
-    };
-    let label_status = match status {
-        CheckStatus::Ok => "OK",
-        CheckStatus::Missing => "MISSING",
-        CheckStatus::Mismatch => "MISMATCH",
-        CheckStatus::Error => "ERROR",
-    };
-    println!("{label} global rule: {label_status}");
-    status
+    }
 }
 
 #[cfg(test)]
