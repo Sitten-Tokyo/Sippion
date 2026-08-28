@@ -33,24 +33,21 @@ jobs:
 
           context_path = Path("src/service/context.rs")
           context = context_path.read_text(encoding="utf-8")
-          old_header = '''    let header = format!(
-              "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={}\\n",
-              usize::from(incomplete),
-              coverage.policy_excluded_files,
-              budget.target_estimated_tokens,
-          );'''
-          new_header = '''    let header = format!(
-              "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={} hard_b={} scan_b={}\\n",
-              usize::from(incomplete),
-              coverage.policy_excluded_files,
-              budget.target_estimated_tokens,
-              budget.hard_model_text_bytes,
-              coverage.scanned_bytes,
-          );'''
-          if old_header in context:
-              context = context.replace(old_header, new_header, 1)
+          old_fmt = '"{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={}\\n",'
+          new_fmt = '"{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={} hard_b={} scan_b={}\\n",'
+          if old_fmt in context:
+              context = context.replace(old_fmt, new_fmt, 1)
+              old_arg = "        budget.target_estimated_tokens,\n"
+              new_arg = (
+                  "        budget.target_estimated_tokens,\n"
+                  "        budget.hard_model_text_bytes,\n"
+                  "        coverage.scanned_bytes,\n"
+              )
+              if old_arg not in context:
+                  raise SystemExit("context budget argument anchor not found")
+              context = context.replace(old_arg, new_arg, 1)
           elif " hard_b=" not in context:
-              raise SystemExit("compact context header anchor not found")
+              raise SystemExit("compact context format anchor not found")
           context_path.write_text(context, encoding="utf-8")
 
           main_path = Path("src/main.rs")
@@ -68,15 +65,19 @@ jobs:
                       target_estimated_tokens = parse_numeric_field(line, "target_t=");
                       scanned_bytes = parse_numeric_field(line, "scan_b=");
                   } else if let Some(rest) = line.strip_prefix("S path=") {
-                      if let Some((path_json, rest)) = rest.split_once(" rank=") {
-                          if let (Ok(path), Some(rank_text)) = (
-                              serde_json::from_str::<String>(path_json),
-                              rest.split_whitespace().next(),
-                          ) {
-                              if let Ok(rank) = rank_text.parse::<f64>() {
-                                  ranked_files.push(RankedFileDiagnostic { path, rank });
-                              }
-                          }
+                      let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+                      let Some(Ok(path)) = stream.next() else {
+                          continue;
+                      };
+                      let metadata = rest[stream.byte_offset()..].trim_start();
+                      let Some(rank_text) = metadata
+                          .strip_prefix("rank=")
+                          .and_then(|value| value.split_whitespace().next())
+                      else {
+                          continue;
+                      };
+                      if let Ok(rank) = rank_text.parse::<f64>() {
+                          ranked_files.push(RankedFileDiagnostic { path, rank });
                       }
                   }
               }
