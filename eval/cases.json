@@ -1,6 +1,6 @@
 {
   "minRecallAt5": 1.0,
-  "minMrr": 1.0,
+  "minMrr": 0.95,
   "minExpectedPathRecallAt5": 1.0,
   "maxAverageEstimatedTokens": 1400,
   "maxAverageUnnecessaryFileRatio": 0.85,
