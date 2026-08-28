@@ -84,9 +84,18 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      - name: Run retrieval quality and context budget evaluation
+      - name: Run fixture retrieval quality and context budget evaluation
         if: runner.os == 'Linux'
         run: python3 scripts/retrieval-eval.py --binary target/release/sippion
+
+      - name: Run self-hosted token efficiency evaluation
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_cases.json \
+            --fixture . \
+            --baseline-root .
 
       - name: Set up pinned Node.js for official MCP client and MCPB tooling
         if: runner.os == 'Linux'
