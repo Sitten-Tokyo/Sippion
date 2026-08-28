@@ -1,0 +1,20 @@
+{
+  "minRecallAt5": 1.0,
+  "minMrr": 0.8,
+  "minExpectedPathRecallAt5": 1.0,
+  "maxAverageEstimatedTokens": 1800,
+  "maxAverageUnnecessaryFileRatio": 0.9,
+  "maxP95LatencyMs": 5000,
+  "minAverageTokenSavings": 0.9,
+  "minRelevantPathsPer1kTokens": 0.35,
+  "cases": [
+    {"name":"context-budget","query":"adaptive_context_budget target estimated tokens","expectedPaths":["src/core.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"adaptive-retrieval","query":"search_token_efficient_since marginal utility","expectedPaths":["src/repo/adaptive.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"snapshot-map","query":"map_from_hits_with_snapshots_since request snapshot","expectedPaths":["src/repo/map.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"context-packer","query":"pack_context ContextAtom utility token","expectedPaths":["src/service/context.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"mcp-cancellation","query":"inflight request cancellation response committed","expectedPaths":["src/mcp.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"root-safety","query":"secure explicit root allow broad root","expectedPaths":["src/root.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"transactional-setup","query":"transactional setup managed client rollback","expectedPaths":["src/setup.rs","src/managed.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"secret-redaction","query":"redact high confidence secrets bounded","expectedPaths":["src/repo/redaction.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400}
+  ]
+}
