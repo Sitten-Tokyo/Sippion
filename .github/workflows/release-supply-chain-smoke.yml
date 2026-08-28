@@ -10,6 +10,9 @@ on:
       - .github/workflows/release-build.yml
       - .github/workflows/release-draft.yml
       - .github/workflows/release-supply-chain-smoke.yml
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,7 @@ concurrency:
 jobs:
   build:
     name: Exercise reusable release build without attestations
+    if: github.event_name != 'release'
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -33,6 +37,7 @@ jobs:
 
   assemble:
     name: Exercise release payload assembly
+    if: github.event_name != 'release'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -63,6 +68,7 @@ jobs:
             test -s "downloaded/$artifact/$artifact"
             test -s "downloaded/$artifact/$artifact.sha256"
             test -s "downloaded/$artifact/SHA256SUMS"
+            (cd "downloaded/$artifact" && sha256sum -c "$artifact.sha256")
           done
 
       - name: Stage installer assets and checksums
@@ -72,13 +78,16 @@ jobs:
           mkdir -p installer-smoke
           cp scripts/install.sh installer-smoke/install.sh
           cp scripts/install.ps1 installer-smoke/install.ps1
-          sha256sum installer-smoke/install.sh installer-smoke/install.ps1 > installer-smoke/SHA256SUMS
-          test -s installer-smoke/install.sh
-          test -s installer-smoke/install.ps1
-          test -s installer-smoke/SHA256SUMS
+          (
+            cd installer-smoke
+            sha256sum install.sh > install.sh.sha256
+            sha256sum install.ps1 > install.ps1.sha256
+            sha256sum -c install.sh.sha256
+            sha256sum -c install.ps1.sha256
+          )
 
   verify-published-policy:
-    name: Verify published artifacts with strict provenance policy
+    name: Verify all published artifacts with strict provenance policy
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -86,42 +95,98 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Resolve latest non-draft published release
+      - name: Resolve exact published release
         id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
-          tag=$(gh release list --repo "$REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
-          test -n "$tag"
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag=$EVENT_TAG
+            test -n "$tag"
+            release_json=$(gh api "repos/$REPOSITORY/releases/tags/$tag")
+            jq -e '.draft == false' <<<"$release_json" >/dev/null
+          else
+            tag=$(gh release list \
+              --repo "$REPOSITORY" \
+              --exclude-drafts \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName')
+            test -n "$tag"
+          fi
           sha=$(gh api "repos/$REPOSITORY/commits/$tag" --jq '.sha')
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Download representative published assets
-        shell: bash
+      - name: Download complete published asset set
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
           mkdir published
           gh release download "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
-            --dir published \
-            --pattern install.sh \
-            --pattern sippion-linux-x86_64
+            --dir published
 
-      - name: Verify installer and binary provenance policy
+          expected=(
+            install.sh
+            install.sh.sha256
+            install.ps1
+            install.ps1.sha256
+            SHA256SUMS
+            sippion-linux-x86_64
+            sippion-linux-x86_64.sha256
+            sippion-windows-x86_64.exe
+            sippion-windows-x86_64.exe.sha256
+            sippion-macos-aarch64
+            sippion-macos-aarch64.sha256
+            sippion-macos-x86_64
+            sippion-macos-x86_64.sha256
+          )
+          for asset in "${expected[@]}"; do
+            test -s "published/$asset" || { echo "Missing release asset: $asset" >&2; exit 2; }
+          done
+
+      - name: Verify every published checksum
         shell: bash
-        env:
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           set -euo pipefail
-          gh attestation verify published/install.sh \
-            --repo "$REPOSITORY" \
-            --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
-            --source-digest "$RELEASE_SHA" >/dev/null
-          gh attestation verify published/sippion-linux-x86_64 \
-            --repo "$REPOSITORY" \
-            --signer-workflow "$REPOSITORY/.github/workflows/release-build.yml" \
-            --source-digest "$RELEASE_SHA" >/dev/null
+          cd published
+          sha256sum -c SHA256SUMS
+          for sidecar in \
+            install.sh.sha256 \
+            install.ps1.sha256 \
+            sippion-linux-x86_64.sha256 \
+            sippion-windows-x86_64.exe.sha256 \
+            sippion-macos-aarch64.sha256 \
+            sippion-macos-x86_64.sha256; do
+            sha256sum -c "$sidecar"
+          done
+
+      - name: Verify every published provenance attestation
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for installer in install.sh install.ps1; do
+            gh attestation verify "published/$installer" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+              --source-digest "$RELEASE_SHA" >/dev/null
+          done
+          for binary in \
+            sippion-linux-x86_64 \
+            sippion-windows-x86_64.exe \
+            sippion-macos-aarch64 \
+            sippion-macos-x86_64; do
+            gh attestation verify "published/$binary" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release-build.yml" \
+              --source-digest "$RELEASE_SHA" >/dev/null
+          done
