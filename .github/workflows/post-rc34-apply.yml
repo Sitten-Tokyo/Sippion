@@ -20,7 +20,9 @@ jobs:
           ref: fix/post-rc34-hardening
 
       - name: Apply deterministic hardening patch
-        run: python3 scripts/apply_post_rc34_hardening.py
+        run: |
+          python3 scripts/apply_post_rc34_hardening.py
+          python3 scripts/apply_post_rc34_deny_fix.py
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
@@ -58,6 +60,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add Cargo.toml Cargo.lock deny.toml src/core.rs src/hybrid.rs src/repo/tests.rs
-          git rm scripts/apply_post_rc34_hardening.py
-          git commit -m 'Harden merge release and Unicode invariants'
+          git rm scripts/apply_post_rc34_hardening.py scripts/apply_post_rc34_deny_fix.py
+          git commit -m 'Harden dependency and Unicode invariants'
           git push origin HEAD:fix/post-rc34-hardening
