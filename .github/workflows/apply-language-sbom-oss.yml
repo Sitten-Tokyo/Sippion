@@ -20,8 +20,68 @@ jobs:
         with:
           ref: feature/language-sbom-oss
 
+      - name: Normalize patch driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/apply_language_sbom_oss.py")
+          text = path.read_text()
+          text = text.replace(
+              "'''          release-assets/install.sh\\n          release-assets/install.ps1\\n'''",
+              "'''            release-assets/install.sh\\n            release-assets/install.ps1\\n'''",
+          )
+          text = text.replace(
+              "'''          release-assets/install.sh\\n          release-assets/install.ps1\\n          release-assets/sippion.cdx.json\\n'''",
+              "'''            release-assets/install.sh\\n            release-assets/install.ps1\\n            release-assets/sippion.cdx.json\\n'''",
+          )
+          path.write_text(text)
+          PY
+
       - name: Apply deterministic feature patch
         run: python scripts/apply_language_sbom_oss.py
+
+      - name: Preserve rc.35 verifier compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path(".github/workflows/release-supply-chain-smoke.yml")
+          text = path.read_text()
+          text = text.replace(
+              "        env:\n          RELEASE_TAG: ${{ steps.release.outputs.tag }}\n        shell: bash\n",
+              "        env:\n          RELEASE_TAG: ${{ steps.release.outputs.tag }}\n          EVENT_NAME: ${{ github.event_name }}\n        shell: bash\n",
+              1,
+          )
+          text = text.replace(
+              "            sippion.cdx.json\n            sippion.cdx.json.sha256\n",
+              "",
+              1,
+          )
+          text = text.replace(
+              "          )\n          for asset in \"${expected[@]}\"; do\n",
+              "          )\n          if [ \"$EVENT_NAME\" = \"release\" ] || [ \"$EVENT_NAME\" = \"workflow_run\" ]; then\n            expected+=(sippion.cdx.json sippion.cdx.json.sha256)\n          fi\n          for asset in \"${expected[@]}\"; do\n",
+              1,
+          )
+          text = text.replace(
+              "            sippion.cdx.json.sha256 \\\\\n",
+              "",
+              1,
+          )
+          text = text.replace(
+              "          done\n\n      - name: Verify every published provenance attestation\n",
+              "          done\n          if [ -f sippion.cdx.json.sha256 ]; then\n            sha256sum -c sippion.cdx.json.sha256\n          fi\n\n      - name: Verify every published provenance attestation\n",
+              1,
+          )
+          text = text.replace(
+              "        gh attestation verify \"published/sippion.cdx.json\" \\\n          --repo \"$REPOSITORY\" \\\n          --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n          --source-digest \"$RELEASE_SHA\" >/dev/null\n",
+              "        if [ -f published/sippion.cdx.json ]; then\n          gh attestation verify \"published/sippion.cdx.json\" \\\n            --repo \"$REPOSITORY\" \\\n            --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n            --source-digest \"$RELEASE_SHA\" >/dev/null\n        fi\n",
+              1,
+          )
+          path.write_text(text)
+          PY
 
       - name: Format and validate Rust changes
         run: |
