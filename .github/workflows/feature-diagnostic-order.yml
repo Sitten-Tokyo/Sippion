@@ -32,22 +32,13 @@ jobs:
           from pathlib import Path
           path = Path("src/main.rs")
           text = path.read_text(encoding="utf-8")
-          anchor = '''    QueryDiagnostic {
-              returned_bytes: context.len(),
-              estimated_tokens: heuristic_v3_estimated_tokens(context),'''
-          replacement = '''    ranked_files.sort_by(|left, right| {
-              right
-                  .rank
-                  .partial_cmp(&left.rank)
-                  .unwrap_or(std::cmp::Ordering::Equal)
-          });
-          QueryDiagnostic {
-              returned_bytes: context.len(),
-              estimated_tokens: heuristic_v3_estimated_tokens(context),'''
-          if replacement not in text:
-              if anchor not in text:
-                  raise SystemExit("query diagnostic anchor not found")
-              text = text.replace(anchor, replacement, 1)
+          marker = "ranked_files.sort_by(|left, right|"
+          if marker not in text:
+              needle = "\n    QueryDiagnostic {\n"
+              replacement = "\n    ranked_files.sort_by(|left, right| right.rank.partial_cmp(&left.rank).unwrap_or(std::cmp::Ordering::Equal));\n    QueryDiagnostic {\n"
+              if needle not in text:
+                  raise SystemExit("query diagnostic return anchor not found")
+              text = text.replace(needle, replacement, 1)
               path.write_text(text, encoding="utf-8")
           PY
           cargo fmt
