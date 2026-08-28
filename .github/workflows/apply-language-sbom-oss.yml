@@ -33,7 +33,12 @@ jobs:
           text = text.replace("\n          release-assets/sippion.cdx.json\n'''", "\n            release-assets/sippion.cdx.json\n'''")
           text = text.replace("\n        for binary in ", "\n          for binary in ")
           text = text.replace("\n        gh attestation verify \"published/sippion.cdx.json\"", "\n          gh attestation verify \"published/sippion.cdx.json\"")
-          path.write_text(text)
+          normalized = []
+          for line in text.splitlines():
+              if "let source =" in line and "auth/session.h" in line:
+                  line = r'        let source = r#"#include "auth/session.h"\nint login(void) { return validate_token(); }\n"#;'
+              normalized.append(line)
+          path.write_text("\n".join(normalized) + "\n")
           PY
 
       - name: Apply deterministic feature patch
