@@ -13,19 +13,24 @@ on:
   release:
     types:
       - published
+  workflow_run:
+    workflows:
+      - Build draft release
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Exercise reusable release build without attestations
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && github.event_name != 'workflow_run'
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -37,7 +42,7 @@ jobs:
 
   assemble:
     name: Exercise release payload assembly
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && github.event_name != 'workflow_run'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -88,6 +93,13 @@ jobs:
 
   verify-published-policy:
     name: Verify all published artifacts with strict provenance policy
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'release/v')
+      )
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -100,12 +112,31 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "release" ]; then
             tag=$EVENT_TAG
             test -n "$tag"
+            release_json=$(gh api "repos/$REPOSITORY/releases/tags/$tag")
+            jq -e '.draft == false' <<<"$release_json" >/dev/null
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ "$RUN_EVENT" != "push" ] || [ "$RUN_CONCLUSION" != "success" ]; then
+              echo "Unexpected release workflow_run state: event=$RUN_EVENT conclusion=$RUN_CONCLUSION" >&2
+              exit 2
+            fi
+            case "$RUN_HEAD_BRANCH" in
+              release/v*) tag=${RUN_HEAD_BRANCH#release/} ;;
+              *) echo "Unexpected release workflow branch: $RUN_HEAD_BRANCH" >&2; exit 2 ;;
+            esac
+            if ! [[ "$RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Invalid release workflow head SHA: $RUN_HEAD_SHA" >&2
+              exit 2
+            fi
             release_json=$(gh api "repos/$REPOSITORY/releases/tags/$tag")
             jq -e '.draft == false' <<<"$release_json" >/dev/null
           else
@@ -119,6 +150,10 @@ jobs:
           fi
           sha=$(gh api "repos/$REPOSITORY/commits/$tag" --jq '.sha')
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          if [ "$EVENT_NAME" = "workflow_run" ] && [ "$sha" != "$RUN_HEAD_SHA" ]; then
+            echo "Published tag $tag resolves to $sha, expected release workflow SHA $RUN_HEAD_SHA" >&2
+            exit 2
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
