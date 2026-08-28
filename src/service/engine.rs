@@ -3,11 +3,14 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use crate::core::{CoordinationContext, NormalizedQuery, RenderExcerpt};
+use crate::core::{
+    CoordinationContext, NormalizedQuery, RenderExcerpt, heuristic_v3_estimated_tokens,
+};
 use crate::hybrid::compact_source_excerpt;
 use crate::repo::{RepositoryAccess, RepositoryAccessError};
 
 use super::context::pack_context;
+use super::{ContextDiagnostics, ContextResult, RankedFileDiagnostic};
 
 /// Retrieval engine kept separate from MCP framing and service error translation.
 ///
@@ -38,6 +41,17 @@ impl RepositoryEngine {
         coordination: Option<&CoordinationContext>,
         cancellation: Option<&AtomicBool>,
     ) -> Result<String, RepositoryAccessError> {
+        Ok(self
+            .context_result(query, coordination, cancellation)?
+            .model_text)
+    }
+
+    pub(super) fn context_result(
+        &self,
+        query: &NormalizedQuery,
+        coordination: Option<&CoordinationContext>,
+        cancellation: Option<&AtomicBool>,
+    ) -> Result<ContextResult, RepositoryAccessError> {
         let (search_results, structural_files) = context_result_limits(query);
         let started = Instant::now();
         let optimized = self.repository.search_token_efficient_since(
@@ -47,6 +61,15 @@ impl RepositoryEngine {
             coordination,
             &started,
         )?;
+        let ranked_files = optimized
+            .outcome
+            .hits
+            .iter()
+            .map(|hit| RankedFileDiagnostic {
+                path: hit.relative_path.clone(),
+                rank: hit.score,
+            })
+            .collect::<Vec<_>>();
         let structure = self.repository.map_from_hits_with_snapshots_since(
             query,
             &optimized.outcome.hits,
@@ -106,13 +129,29 @@ impl RepositoryEngine {
             ""
         };
 
-        Ok(pack_context(
+        let packed = pack_context(
             query,
             &structure.entries,
             &excerpts,
             status,
             &coverage,
-        ))
+        );
+        let model_text = packed.text;
+        let diagnostics = ContextDiagnostics {
+            returned_bytes: model_text.len(),
+            estimated_tokens: heuristic_v3_estimated_tokens(&model_text),
+            hard_budget_bytes: packed.hard_budget_bytes,
+            target_estimated_tokens: packed.target_estimated_tokens,
+            scanned_bytes: coverage.scanned_bytes,
+            confidence_milli: coverage.confidence_milli,
+            adaptive_rounds: coverage.adaptive_rounds,
+            ranked_files,
+            packed_paths: packed.packed_paths,
+        };
+        Ok(ContextResult {
+            model_text,
+            diagnostics,
+        })
     }
 }
 
