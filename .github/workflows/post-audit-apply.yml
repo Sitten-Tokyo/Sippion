@@ -25,8 +25,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Prepare deterministic patch edge cases
+        run: python3 scripts/post_audit_patch_fixup.py
+
       - name: Apply deterministic hardening patch
         run: python3 scripts/apply_post_audit_hardening.py
+
+      - name: Apply generated-test fixups
+        run: python3 scripts/post_audit_patch_fixup.py
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
