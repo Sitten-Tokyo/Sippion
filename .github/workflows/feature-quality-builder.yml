@@ -1,0 +1,57 @@
+name: Temporary quality feature builder
+
+on:
+  push:
+    branches:
+      - feature/eval-conformance-cli-registry
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-quality-feature-builder
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feature/eval-conformance-cli-registry
+          fetch-depth: 0
+
+      - name: Apply feature implementation
+        run: python3 scripts/apply_quality_features.py
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Format and validate Rust
+        run: |
+          cargo fmt
+          cargo check --locked
+          cargo test --locked
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Build release binary and run retrieval eval
+        run: |
+          cargo build --release --locked
+          python3 scripts/retrieval-eval.py --binary target/release/sippion
+
+      - name: Commit generated feature changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Add retrieval eval, diagnostics, conformance, and registry packaging'
+          git push origin HEAD:feature/eval-conformance-cli-registry
