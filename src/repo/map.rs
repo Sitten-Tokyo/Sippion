@@ -166,6 +166,7 @@ impl RepositoryAccess {
         self.map_from_hits_since(query, hits, max_files, cancellation, &started)
     }
 
+    #[cfg(test)]
     pub fn map_from_hits_since(
         &self,
         query: &NormalizedQuery,

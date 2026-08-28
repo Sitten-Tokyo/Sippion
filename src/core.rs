@@ -337,10 +337,12 @@ pub struct RenderExcerpt {
     pub score: f64,
 }
 
+#[cfg(test)]
 fn escaped_path(path: &str) -> String {
     serde_json::to_string(path).unwrap_or_else(|_| "\"<invalid-path>\"".to_string())
 }
 
+#[cfg(test)]
 fn excerpt_header(excerpt: &RenderExcerpt) -> String {
     if excerpt.start_line == 0 && excerpt.end_line == 0 {
         let match_kind = if excerpt.body.is_empty() {
@@ -361,6 +363,7 @@ fn excerpt_header(excerpt: &RenderExcerpt) -> String {
     )
 }
 
+#[cfg(test)]
 fn serialize_excerpt(excerpt: &RenderExcerpt) -> String {
     let mut out = excerpt_header(excerpt);
     if !excerpt.body.is_empty() {
@@ -381,6 +384,7 @@ pub(crate) fn truncate_utf8_prefix(text: &str, max_bytes: usize) -> &str {
     &text[..end]
 }
 
+#[cfg(test)]
 fn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -> Option<String> {
     const MARKER: &str =
         "\n[SIPPION_TRUNCATED: narrow the query or use a native line-range read]\n";
@@ -415,6 +419,7 @@ fn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -
 
 /// Greedily admits highest-scoring evidence. If the best excerpt alone is oversized, return a
 /// marked prefix rather than failing and pushing the agent into an unbounded native search.
+#[cfg(test)]
 #[must_use]
 pub fn render_excerpts(mut excerpts: Vec<RenderExcerpt>, budget: ModelVisibleBudget) -> String {
     excerpts.sort_by(|a, b| {

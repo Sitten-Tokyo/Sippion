@@ -23,6 +23,7 @@ pub(super) fn upsert_repo_edge(
     }
 }
 
+#[cfg(test)]
 pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome) -> f64 {
     if outcome.hits.is_empty() {
         // A policy-excluded file is intentionally not adaptive-scan-expandable, but it still

@@ -32,6 +32,7 @@ impl RepositoryAccess {
         self.search_coordinated_since(query, max_results, cancellation, context, &started)
     }
 
+    #[cfg(test)]
     pub fn search_coordinated_since(
         &self,
         query: &NormalizedQuery,
