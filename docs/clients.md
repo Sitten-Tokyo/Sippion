@@ -53,15 +53,20 @@ sippion uninstall
 `setup` is idempotent and transactional across its managed client files.
 Existing Sippion-managed text blocks are rewritten only when exactly one ordered
 BEGIN/END marker pair is present; malformed or duplicate markers cause a
-fail-closed error instead of risking unrelated settings. Managed-file symlinks
-are refused. On Unix, MCP configuration files are owner-only `0600` and rollback
-restores the previous permission bits. Setup does not create persistent
-`.sippion-backup` copies; legacy copies are removed transactionally. If any
-setup operation fails, files touched by that setup attempt are restored to their
-pre-attempt state. `doctor` reports missing, mismatched, malformed, or unreadable
-registrations and exits non-zero when any expected registration is unhealthy.
-`uninstall` removes only Sippion-managed entries and rules; it does not remove
-the binary or unrelated settings.
+fail-closed error instead of risking unrelated settings. Managed files and the
+managed parent directories (`~/.codex`, `~/.claude`, `~/.gemini`, and
+`~/.gemini/config`) are refused when they are symlinks. On Unix, MCP
+configuration files are owner-only `0600` and rollback restores the previous
+permission bits. Setup does not create persistent `.sippion-backup` copies;
+legacy copies are removed transactionally. If any setup operation fails, files
+touched by that setup attempt are restored to their pre-attempt state. `doctor`
+reports missing, mismatched, malformed, or unreadable registrations and exits
+non-zero when any expected registration is unhealthy.
+
+`uninstall` is transactional as well: it snapshots the same six managed files
+and legacy backup siblings before mutation and restores the pre-attempt state if
+any removal fails. It removes only Sippion-managed entries and rules; it does
+not remove the binary or unrelated settings.
 
 ## Run locally
 
@@ -76,9 +81,18 @@ Automatic discovery selects the nearest recognized Git/project boundary. It
 does not continue past a nearer project manifest merely to prefer a farther
 `.git` marker, and on Unix it refuses to trust group/other-writable shared
 directories as automatic boundaries. Home-directory and filesystem-root
-selection also fails closed.
+selection also fails closed. Home resolution itself is part of this guard: if
+Sippion cannot resolve the current user's home directory, automatic discovery
+stops rather than silently dropping the home/ancestor check.
 
-You can also bind each process explicitly to one trusted project root:
+On Windows, stable safe Rust APIs do not expose enough DACL information for
+Sippion to prove that an arbitrary ancestor is not shared-writable while the
+crate keeps `unsafe` code forbidden. Therefore `--root-auto` is deliberately
+limited to projects under the canonical current-user profile. For a trusted
+project elsewhere (for example another drive or a shared workspace), configure
+an explicit `--root` instead.
+
+You can bind each process explicitly to one trusted project root:
 
 ```sh
 sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT
@@ -87,8 +101,9 @@ sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT --scan-budget-mib 128
 
 The default adaptive ceiling is 512 MiB and retrieval normally starts at
 32 MiB. Explicit home-directory, filesystem-root, or home-ancestor scans are
-rejected unless a manual invocation also supplies `--allow-broad-root`. Setup
-never enables that override.
+rejected unless a manual invocation also supplies `--allow-broad-root`. When
+that broad-root override is not supplied, home resolution also fails closed so
+the guard cannot silently disappear. Setup never enables that override.
 
 ## Manual client registration
 

@@ -83,6 +83,7 @@ impl RepositoryAccess {
         let mut candidates = Vec::<MapCandidate>::new();
         let mut map_source_bytes = 0usize;
         let mut map_redacted_bytes = 0usize;
+        let mut map_folded_bytes = 0usize;
         let mut invalidated_evidence_paths = Vec::<String>::new();
         let structural_limit = max_files.min(16);
         let mut structural_collection_enabled = true;
@@ -152,9 +153,9 @@ impl RepositoryAccess {
 
             // Redaction markers can be longer than the secret they replace (for example
             // `token="x"`). Bound the redacted representation before analysis so a crafted
-            // repository cannot turn the 32 MiB raw-source budget into hundreds of MiB of
-            // retained `source_lower` buffers. The bounded redactor also suppresses giant single
-            // lines before any allocating per-line redactor sees them.
+            // repository cannot turn the 32 MiB raw-source budget into hundreds of MiB of retained
+            // folded buffers. The bounded redactor also suppresses giant single lines before any
+            // allocating per-line redactor sees them.
             let redaction = redact_high_confidence_secrets_bounded(&source.text, MAX_SOURCE_BYTES);
             if redaction.truncated {
                 truncated = true;
@@ -165,7 +166,7 @@ impl RepositoryAccess {
                 structural_collection_enabled = false;
                 continue;
             }
-            let mut safe = redaction.text;
+            let safe = redaction.text;
             let Some(analysis) = self.analyze_source_cached(
                 &hit.relative_path,
                 &safe,
@@ -181,7 +182,7 @@ impl RepositoryAccess {
             let mut definition_names = analysis
                 .symbols
                 .iter()
-                .map(|symbol| symbol.name.to_ascii_lowercase())
+                .map(|symbol| crate::core::unicode_search_fold(&symbol.name))
                 .filter(|name| name.len() >= 2)
                 .collect::<Vec<_>>();
             definition_names.sort();
@@ -203,8 +204,8 @@ impl RepositoryAccess {
                 .collect::<Vec<_>>();
             symbols.sort_by(|a, b| {
                 let score = |symbol: &RepoMapSymbol| {
-                    let name = symbol.name.to_ascii_lowercase();
-                    let signature = symbol.signature.to_ascii_lowercase();
+                    let name = crate::core::unicode_search_fold(&symbol.name);
+                    let signature = crate::core::unicode_search_fold(&symbol.signature);
                     query
                         .terms
                         .iter()
@@ -235,7 +236,7 @@ impl RepositoryAccess {
                 .references
                 .iter()
                 .map(|reference| {
-                    let name = reference.name.to_ascii_lowercase();
+                    let name = crate::core::unicode_search_fold(&reference.name);
                     let overlap = query
                         .terms
                         .iter()
@@ -252,17 +253,20 @@ impl RepositoryAccess {
                 .sum::<f64>()
                 .min(8.0);
 
-            // `safe` is no longer needed with original casing. Lowercase it in place instead of
-            // allocating a second file-sized String; the retained map representation therefore
-            // stays within the same redacted-byte budget.
             drop(safe_lines);
-            safe.make_ascii_lowercase();
+            let source_lower = crate::core::unicode_search_fold(&safe);
+            map_folded_bytes = map_folded_bytes.saturating_add(source_lower.len());
+            if map_folded_bytes > MAX_REPOSITORY_MAP_SOURCE_BYTES {
+                truncated = true;
+                structural_collection_enabled = false;
+                continue;
+            }
 
             candidates.push(MapCandidate {
                 relative_path: hit.relative_path.clone(),
                 stamp: source.stamp,
                 search_score: hit.score,
-                source_lower: safe,
+                source_lower,
                 symbols,
                 definition_names,
                 semantics,
@@ -315,7 +319,7 @@ impl RepositoryAccess {
                     break;
                 }
                 for reference in &candidate.semantics.references {
-                    let key = reference.name.to_ascii_lowercase();
+                    let key = crate::core::unicode_search_fold(&reference.name);
                     let Some(targets) = definition_targets.get(&key) else {
                         continue;
                     };
@@ -331,12 +335,12 @@ impl RepositoryAccess {
                 }
 
                 for import_path in &candidate.semantics.import_paths {
-                    let import_lower = import_path.to_ascii_lowercase();
+                    let import_lower = crate::core::unicode_search_fold(import_path);
                     for (to, target) in candidates.iter().enumerate() {
                         if to == from {
                             continue;
                         }
-                        let path = target.relative_path.to_ascii_lowercase();
+                        let path = crate::core::unicode_search_fold(&target.relative_path);
                         let stem = Path::new(&path)
                             .file_stem()
                             .and_then(|value| value.to_str())

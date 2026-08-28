@@ -1,5 +1,29 @@
 use super::*;
 
+const MAX_IGNORE_CONTROL_INSPECTION_BYTES: u64 = 64 * 1024;
+
+fn ignore_control_has_effective_rule(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() || metadata.len() == 0 {
+        return false;
+    }
+    // Stay conservative for unusually large, unreadable, or non-UTF-8 control files: any of those
+    // can hide repository content, but they should not force an unbounded side read just to decide
+    // whether a complete NO_MATCH status is safe.
+    if metadata.len() > MAX_IGNORE_CONTROL_INSPECTION_BYTES {
+        return true;
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    contents.lines().any(|line| {
+        let line = line.trim_end_matches('\r');
+        !line.trim().is_empty() && !line.starts_with('#')
+    })
+}
+
 impl RepositoryAccess {
     #[cfg(test)]
     pub fn open(root_path: impl AsRef<Path>) -> Result<Self, RepositoryAccessError> {
@@ -146,15 +170,14 @@ impl RepositoryAccess {
         // can never be reported as an absolute NO_MATCH when policy hid repository content. A
         // pruned directory counts as one exclusion sentinel even though its subtree size is unknown.
         //
-        // The ignore walker can also hide entries before the discovery loop sees them. A non-empty
-        // .gitignore/.ignore is therefore one conservative exclusion sentinel. Empty control files
-        // cannot hide anything and must not degrade an otherwise complete NO_MATCH result. We use
-        // symlink metadata only and never follow the control path outside the trusted root.
+        // The ignore walker can also hide entries before the discovery loop sees them. Only an
+        // ignore control with an effective rule contributes a conservative exclusion sentinel;
+        // empty, whitespace-only, and comment-only controls cannot hide anything and therefore must
+        // not degrade an otherwise complete NO_MATCH result.
         let has_effective_ignore_control = |directory: &Path| {
-            [".gitignore", ".ignore"].into_iter().any(|name| {
-                std::fs::symlink_metadata(directory.join(name))
-                    .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
-            })
+            [".gitignore", ".ignore"]
+                .into_iter()
+                .any(|name| ignore_control_has_effective_rule(&directory.join(name)))
         };
         let root_ignore_sentinel = if has_effective_ignore_control(&root_path) {
             1

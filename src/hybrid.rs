@@ -12,8 +12,9 @@ pub fn term_statistics(text: &str, terms: &[String]) -> (usize, Vec<usize>) {
         .filter(|part| part.len() >= 2)
     {
         document_len = document_len.saturating_add(1);
+        let folded = crate::core::unicode_search_fold(part);
         for (index, term) in terms.iter().enumerate() {
-            if part.eq_ignore_ascii_case(term) {
+            if folded == *term {
                 frequencies[index] = frequencies[index].saturating_add(1);
             }
         }
@@ -21,7 +22,7 @@ pub fn term_statistics(text: &str, terms: &[String]) -> (usize, Vec<usize>) {
 
     // Code identifiers are often compounds (validate_token, AuthTokenValidator). Preserve the
     // old substring-recall behaviour as a one-hit fallback while BM25 rewards exact token repeats.
-    let lower = text.to_ascii_lowercase();
+    let lower = crate::core::unicode_search_fold(text);
     for (index, term) in terms.iter().enumerate() {
         if frequencies[index] == 0 && lower.contains(term.as_str()) {
             frequencies[index] = 1;
@@ -61,7 +62,7 @@ pub fn bm25_score(
 #[must_use]
 pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     let trimmed = line.trim_start();
-    let lower = trimmed.to_ascii_lowercase();
+    let lower = crate::core::unicode_search_fold(trimmed);
     if !terms.iter().any(|term| lower.contains(term)) {
         return 0.0;
     }
@@ -257,6 +258,13 @@ mod tests {
         let a = bm25_score(&[3, 1], 20, 20.0, &df, 10);
         let b = bm25_score(&[1, 1], 20, 20.0, &df, 10);
         assert!(a > b);
+    }
+
+    #[test]
+    fn term_statistics_matches_unicode_case_variants() {
+        let terms = vec!["überprüfung".to_string()];
+        let (_, frequencies) = term_statistics("fn ÜBERPRÜFUNG() {}", &terms);
+        assert_eq!(frequencies, vec![1]);
     }
 
     #[test]

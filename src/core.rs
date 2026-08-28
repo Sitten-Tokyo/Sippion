@@ -14,6 +14,39 @@ const QUERY_STOPWORDS: &[&str] = &[
     "with",
 ];
 
+/// Unicode-aware lowercase used only for retrieval/ranking equivalence. Security path policy keeps
+/// its deliberately narrower ASCII folding so filesystem-policy semantics do not change here.
+#[must_use]
+pub(crate) fn unicode_search_fold(text: &str) -> String {
+    text.to_lowercase()
+}
+
+/// Finds a folded search term while returning the byte offset in the original UTF-8 text. Unicode
+/// lowercasing can change encoded length, so callers that need source excerpts must not use the
+/// folded string's byte position directly.
+#[must_use]
+pub(crate) fn unicode_search_fold_find_byte(text: &str, folded_needle: &str) -> Option<usize> {
+    if folded_needle.is_empty() {
+        return Some(0);
+    }
+    if text.is_ascii() && folded_needle.is_ascii() {
+        return text.to_ascii_lowercase().find(folded_needle);
+    }
+
+    let mut folded = String::with_capacity(text.len());
+    let mut folded_byte_to_source = Vec::with_capacity(text.len());
+    for (source_byte, ch) in text.char_indices() {
+        for folded_ch in ch.to_lowercase() {
+            let mut buffer = [0u8; 4];
+            let encoded = folded_ch.encode_utf8(&mut buffer);
+            folded.push_str(encoded);
+            folded_byte_to_source.extend(std::iter::repeat_n(source_byte, encoded.len()));
+        }
+    }
+    let folded_byte = folded.find(folded_needle)?;
+    folded_byte_to_source.get(folded_byte).copied()
+}
+
 /// The server process is bound to exactly one trusted project root. The model supplies only a
 /// bounded search query; filesystem authority and direct file reads remain outside the MCP schema.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -62,7 +95,7 @@ impl McpToolInput {
             .q
             .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
             .filter(|part| part.len() >= 2)
-            .map(str::to_ascii_lowercase)
+            .map(unicode_search_fold)
             .filter(|part| !QUERY_STOPWORDS.contains(&part.as_str()))
         {
             if !terms.contains(&part) {
@@ -77,7 +110,7 @@ impl McpToolInput {
         }
 
         Ok(NormalizedQuery {
-            raw_lower: self.q.to_ascii_lowercase(),
+            raw_lower: unicode_search_fold(&self.q),
             terms,
         })
     }
@@ -428,6 +461,22 @@ mod tests {
         .normalize()
         .expect("valid discovery query");
         assert_eq!(normalized.terms, vec!["auth", "token", "validation"]);
+
+        let unicode = McpToolInput {
+            q: "ÄUTH Überprüfung".into(),
+            ..Default::default()
+        }
+        .normalize()
+        .expect("Unicode query");
+        assert_eq!(unicode.terms, vec!["äuth", "überprüfung"]);
+    }
+
+    #[test]
+    fn folded_match_returns_original_utf8_byte_offset() {
+        let text = "prefix İTOKEN suffix";
+        let needle = unicode_search_fold("İTOKEN");
+        let offset = unicode_search_fold_find_byte(text, &needle).expect("match");
+        assert_eq!(&text[offset..offset + "İTOKEN".len()], "İTOKEN");
     }
 
     #[test]
