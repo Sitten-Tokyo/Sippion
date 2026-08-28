@@ -1,0 +1,62 @@
+name: Feature diagnostic order
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          persist-credentials: true
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt
+
+      - name: Normalize diagnostic ranking by relevance score
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/main.rs")
+          text = path.read_text(encoding="utf-8")
+          anchor = '''    QueryDiagnostic {
+              returned_bytes: context.len(),
+              estimated_tokens: heuristic_v3_estimated_tokens(context),'''
+          replacement = '''    ranked_files.sort_by(|left, right| {
+              right
+                  .rank
+                  .partial_cmp(&left.rank)
+                  .unwrap_or(std::cmp::Ordering::Equal)
+          });
+          QueryDiagnostic {
+              returned_bytes: context.len(),
+              estimated_tokens: heuristic_v3_estimated_tokens(context),'''
+          if replacement not in text:
+              if anchor not in text:
+                  raise SystemExit("query diagnostic anchor not found")
+              text = text.replace(anchor, replacement, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt
+          if git diff --quiet; then
+            echo "Already normalized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.rs
+          git commit -m "Sort query diagnostics by retrieval relevance"
+          git push origin HEAD:feature/context-efficiency-overhaul
