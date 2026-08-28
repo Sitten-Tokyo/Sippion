@@ -1,0 +1,113 @@
+name: Publish to Official MCP Registry
+
+on:
+  workflow_run:
+    workflows:
+      - Build draft release
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published Sippion release tag to publish to the MCP Registry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mcp-registry-publish-${{ github.event.workflow_run.id || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'release/v')
+      )
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Resolve exact published release
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            tag=${RUN_HEAD_BRANCH#release/}
+            expected_sha=$RUN_HEAD_SHA
+          else
+            tag=$INPUT_TAG
+            expected_sha=''
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          release_json=$(gh api "repos/$REPOSITORY/releases/tags/$tag")
+          jq -e '.draft == false' <<<"$release_json" >/dev/null
+          sha=$(gh api "repos/$REPOSITORY/commits/$tag" --jq '.sha')
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          if [ -n "$expected_sha" ] && [ "$sha" != "$expected_sha" ]; then
+            echo "Published tag $tag resolves to $sha, expected $expected_sha" >&2
+            exit 2
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify registry release assets
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir published
+          gh release download "$RELEASE_TAG" --repo "$REPOSITORY" --dir published --pattern 'server.json*' --pattern '*.mcpb*'
+          cd published
+          test -s server.json
+          test -s server.json.sha256
+          sha256sum -c server.json.sha256
+          for bundle in \
+            sippion-linux-x86_64.mcpb \
+            sippion-windows-x86_64.mcpb \
+            sippion-macos-aarch64.mcpb \
+            sippion-macos-x86_64.mcpb; do
+            test -s "$bundle"
+            test -s "$bundle.sha256"
+            sha256sum -c "$bundle.sha256"
+            gh attestation verify "$bundle" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+              --source-digest "$RELEASE_SHA" >/dev/null
+          done
+          gh attestation verify server.json \
+            --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+            --source-digest "$RELEASE_SHA" >/dev/null
+
+      - name: Install pinned MCP Registry publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --output /tmp/mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  /tmp/mcp-publisher.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
+          /tmp/mcp-publisher validate published/server.json
+
+      - name: Authenticate with GitHub OIDC
+        run: /tmp/mcp-publisher login github-oidc
+
+      - name: Publish exact release metadata
+        run: /tmp/mcp-publisher publish published/server.json
