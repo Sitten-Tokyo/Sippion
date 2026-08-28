@@ -101,7 +101,7 @@ jobs:
                 ;;
             esac
             case "$path" in
-              scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|.github/workflows/release-build.yml|.github/workflows/release-draft.yml|.github/workflows/release-supply-chain-smoke.yml)
+              Cargo.toml|Cargo.lock|scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|.github/workflows/release-build.yml|.github/workflows/release-draft.yml|.github/workflows/release-supply-chain-smoke.yml)
                 require_release=1
                 ;;
             esac
