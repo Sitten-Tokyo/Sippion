@@ -102,10 +102,8 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
             .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
             .unwrap_or(rest.len());
         let identifier = &rest[..end];
-        let ownership_match = !identifier.is_empty()
-            && terms
-                .iter()
-                .all(|term| identifier.contains(term.as_str()));
+        let ownership_match =
+            !identifier.is_empty() && terms.iter().all(|term| identifier.contains(term.as_str()));
         // Definition ownership is stronger evidence than repeated call/import references. This
         // prevents BM25 term frequency from making a caller outrank the symbol's defining file.
         return if ownership_match { 14.0 } else { 6.0 };
@@ -281,12 +279,16 @@ mod tests {
             "validate".to_string(),
         ];
         assert!(
-            structural_line_bonus("pub fn validate_session_token(token: &str) -> bool {", &symbol)
-                > structural_line_bonus("use crate::auth::validate_session_token;", &symbol)
+            structural_line_bonus(
+                "pub fn validate_session_token(token: &str) -> bool {",
+                &symbol
+            ) > structural_line_bonus("use crate::auth::validate_session_token;", &symbol)
         );
         assert!(
-            structural_line_bonus("pub fn validate_session_token(token: &str) -> bool {", &natural)
-                > structural_line_bonus("validate_session_token(token)", &natural)
+            structural_line_bonus(
+                "pub fn validate_session_token(token: &str) -> bool {",
+                &natural
+            ) > structural_line_bonus("validate_session_token(token)", &natural)
         );
     }
 
