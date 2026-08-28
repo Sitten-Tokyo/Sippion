@@ -36,9 +36,15 @@ jobs:
         run: python3 scripts/retrieval-eval.py --binary target/release/sippion
 
       - name: Run self-hosted token efficiency evaluation
+        shell: bash
         run: |
+          set -euo pipefail
+          self_root="$RUNNER_TEMP/sippion-self-eval"
+          rm -rf "$self_root"
+          mkdir -p "$self_root"
+          cp -R src "$self_root/src"
           python3 scripts/retrieval-eval.py \
             --binary target/release/sippion \
             --cases eval/self_cases.json \
-            --fixture . \
-            --baseline-root .
+            --fixture "$self_root" \
+            --baseline-root "$self_root"
