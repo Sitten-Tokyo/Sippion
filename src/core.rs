@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::cmp::Ordering;
 
 use serde::Deserialize;
