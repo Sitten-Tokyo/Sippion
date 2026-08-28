@@ -1,13 +1,23 @@
 {
   "minRecallAt5": 1.0,
-  "minMrr": 1.0,
-  "maxAverageEstimatedTokens": 2100,
+  "minMrr": 0.95,
+  "minExpectedPathRecallAt5": 1.0,
+  "maxAverageEstimatedTokens": 1400,
+  "maxAverageUnnecessaryFileRatio": 0.85,
+  "maxP95LatencyMs": 3000,
   "cases": [
-    {"name":"rust-auth","query":"validate_session_token","expectedPaths":["src/auth.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
-    {"name":"python-router","query":"RouteDispatcher","expectedPaths":["python/router.py"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
-    {"name":"java-account","query":"JavaAccountService","expectedPaths":["java/AccountService.java"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
-    {"name":"csharp-token","query":"CSharpTokenValidator","expectedPaths":["csharp/TokenValidator.cs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
-    {"name":"c-packet","query":"normalize_packet_header","expectedPaths":["c/packet.c"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
-    {"name":"cpp-cache","query":"native_cache_probe","expectedPaths":["cpp/cache.cpp"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100}
+    {"name":"rust-auth-symbol","query":"validate_session_token","expectedPaths":["src/auth.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"python-router-symbol","query":"RouteDispatcher","expectedPaths":["python/router.py"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"java-account-symbol","query":"JavaAccountService","expectedPaths":["java/AccountService.java"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"csharp-token-symbol","query":"CSharpTokenValidator","expectedPaths":["csharp/TokenValidator.cs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"c-packet-symbol","query":"normalize_packet_header","expectedPaths":["c/packet.c"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"cpp-cache-symbol","query":"native_cache_probe","expectedPaths":["cpp/cache.cpp"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"rust-auth-natural","query":"session token validate","expectedPaths":["src/auth.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"python-router-natural","query":"route dispatcher dispatch","expectedPaths":["python/router.py"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"java-account-natural","query":"account service load","expectedPaths":["java/AccountService.java"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"csharp-token-ambiguous","query":"CSharp token validator Length","expectedPaths":["csharp/TokenValidator.cs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"c-packet-natural","query":"packet header normalize","expectedPaths":["c/packet.c"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"cpp-cache-natural","query":"native cache probe","expectedPaths":["cpp/cache.cpp"],"maxReturnedBytes":8192,"maxEstimatedTokens":2100},
+    {"name":"rust-cross-file-auth","query":"authenticate request session token","expectedPaths":["src/session_controller.rs","src/auth.rs"],"requireAllExpectedAt5":true,"maxReturnedBytes":8192,"maxEstimatedTokens":2100}
   ]
 }

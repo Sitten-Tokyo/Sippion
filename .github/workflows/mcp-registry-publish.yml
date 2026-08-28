@@ -111,3 +111,56 @@ jobs:
 
       - name: Publish exact release metadata
         run: /tmp/mcp-publisher publish published/server.json
+
+      - name: Verify exact Registry read-back
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REGISTRY_BASE_URL: https://registry.modelcontextprotocol.io
+        shell: bash
+        run: |
+          set -euo pipefail
+          server_name=$(jq -r '.name' published/server.json)
+          version=$(jq -r '.version' published/server.json)
+          encoded_name=$(jq -rn --arg value "$server_name" '$value|@uri')
+          encoded_version=$(jq -rn --arg value "$version" '$value|@uri')
+          exact_url="$REGISTRY_BASE_URL/v0.1/servers/$encoded_name/versions/$encoded_version"
+          latest_url="$REGISTRY_BASE_URL/v0.1/servers/$encoded_name/versions/latest"
+          normalize_filter='{name,title,description,repository,version,websiteUrl,icons:(.icons // []),packages:((.packages // []) | map({registryType,identifier,fileSha256,transport}) | sort_by(.identifier))}'
+          local_record=$(jq -S -c "$normalize_filter" published/server.json)
+
+          verified=0
+          for attempt in $(seq 1 24); do
+            if curl --fail --location --silent --show-error "$exact_url" -o /tmp/registry-exact.json; then
+              if jq -e \
+                --arg name "$server_name" \
+                --arg version "$version" '
+                  .server.name == $name
+                  and .server.version == $version
+                  and ._meta["io.modelcontextprotocol.registry/official"].status == "active"
+                ' /tmp/registry-exact.json >/dev/null; then
+                remote_record=$(jq -S -c ".server | $normalize_filter" /tmp/registry-exact.json)
+                if [ "$remote_record" = "$local_record" ]; then
+                  verified=1
+                  break
+                fi
+              fi
+            fi
+            sleep 5
+          done
+          if [ "$verified" -ne 1 ]; then
+            echo "Registry exact-version read-back did not converge to published metadata." >&2
+            test ! -s /tmp/registry-exact.json || cat /tmp/registry-exact.json >&2
+            exit 2
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            curl --fail --location --silent --show-error "$latest_url" -o /tmp/registry-latest.json
+            jq -e \
+              --arg name "$server_name" \
+              --arg version "$version" '
+                .server.name == $name
+                and .server.version == $version
+                and ._meta["io.modelcontextprotocol.registry/official"].status == "active"
+                and ._meta["io.modelcontextprotocol.registry/official"].isLatest == true
+              ' /tmp/registry-latest.json >/dev/null
+          fi

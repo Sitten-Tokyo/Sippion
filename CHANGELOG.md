@@ -4,22 +4,33 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 
 ## [Unreleased]
 
+### Changed
+
+- Release-sensitive pull requests now keep the required `RustSec dependency audit` check pending until the exact-head release supply-chain smoke succeeds, so manual and automated merges share the same release gate.
+- Official MCP Registry publishing now verifies the exact published record through the stable `/v0.1` API, including active status and package metadata, and confirms newly released versions are `latest`.
+- Retrieval evaluation now covers natural-language queries, ambiguous lexical noise, and cross-file evidence, with expected-path recall, unnecessary-file ratio, latency, and context-size regression gates.
+- MCPB package inputs now normalize metadata, and CI requires repeated packs of identical inputs to be byte-for-byte reproducible.
+- Generated `server.json` metadata now includes the stable GitHub repository ID, project website, and publisher icon metadata.
+
+### Documentation
+
+- Document the Official MCP Registry name and per-platform MCPB distribution in the README.
+
+## [0.1.0-rc.36] - 2026-08-28
+
 ### Added
 
 - Retrieval evaluation with Recall@5/MRR and model-visible byte/token regression gates.
 - Opt-in `query`, `inspect`, and machine-readable/verbose Doctor diagnostics without expanding `repo_context`.
 - Black-box MCP conformance checks using the official MCP client implementation.
 - Per-platform MCPB release packaging, generated `server.json`, and post-release Official MCP Registry publication via GitHub OIDC.
-
-### Added
-
 - Bounded Tree-sitter and source-only semantic support for Java, C#, C, and C++ in addition to Rust, Python, JavaScript/TypeScript, and Go.
 - CycloneDX JSON SBOM generation as a checksummed, provenance-attested release asset with post-publication verification.
 - Top-level contributor and security-reporting guidance.
 
 ### Changed
 
-- Dependency changes now require the release supply-chain smoke gate because they change the generated SBOM.
+- Dependency changes require the release supply-chain smoke gate because they change the generated SBOM.
 
 ## [0.1.0-rc.35] - 2026-08-28
 
@@ -39,5 +50,6 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 
 - Added a `workflow_run` backstop so releases published by GitHub Actions still trigger strict post-publication verification despite `GITHUB_TOKEN` recursive-trigger suppression.
 
-[Unreleased]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.35...HEAD
+[Unreleased]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.36...HEAD
+[0.1.0-rc.36]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.35...v0.1.0-rc.36
 [0.1.0-rc.35]: https://github.com/Sitten-Tokyo/Sippion/releases/tag/v0.1.0-rc.35

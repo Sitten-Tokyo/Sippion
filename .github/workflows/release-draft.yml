@@ -159,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           version=${RELEASE_TAG#v}
-          mkdir -p release-assets mcpb-work
+          mkdir -p release-assets mcpb-work mcpb-raw
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-linux-x86_64/sippion-linux-x86_64 --platform linux --version "$version" --output-dir mcpb-work/linux
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-windows-x86_64.exe/sippion-windows-x86_64.exe --platform win32 --version "$version" --output-dir mcpb-work/windows
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-macos-aarch64/sippion-macos-aarch64 --platform darwin --version "$version" --output-dir mcpb-work/macos-aarch64
@@ -172,7 +172,9 @@ jobs:
             dir=${spec%%:*}
             file=${spec#*:}
             npx --yes @anthropic-ai/mcpb@2.1.2 validate "mcpb-work/$dir"
-            npx --yes @anthropic-ai/mcpb@2.1.2 pack "mcpb-work/$dir" "release-assets/$file"
+            npx --yes @anthropic-ai/mcpb@2.1.2 pack "mcpb-work/$dir" "mcpb-raw/$file"
+            python3 scripts/canonicalize-mcpb.py --input "mcpb-raw/$file" --output "release-assets/$file"
+            npx --yes @anthropic-ai/mcpb@2.1.2 info "release-assets/$file" >/dev/null
             test -s "release-assets/$file"
           done
           python3 scripts/generate-server-json.py --assets-dir release-assets --tag "$RELEASE_TAG" --version "$version" --output release-assets/server.json

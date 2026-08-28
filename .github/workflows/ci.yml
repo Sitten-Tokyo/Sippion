@@ -5,7 +5,9 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -86,7 +88,7 @@ jobs:
         if: runner.os == 'Linux'
         run: python3 scripts/retrieval-eval.py --binary target/release/sippion
 
-      - name: Set up pinned Node.js for official MCP client
+      - name: Set up pinned Node.js for official MCP client and MCPB tooling
         if: runner.os == 'Linux'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -99,6 +101,32 @@ jobs:
       - name: Run external MCP protocol conformance
         if: runner.os == 'Linux'
         run: node scripts/mcp-conformance.mjs target/release/sippion eval/fixture
+
+      - name: Verify deterministic MCPB packaging
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          rm -rf /tmp/sippion-mcpb-repro
+          mkdir -p /tmp/sippion-mcpb-repro
+          for pass in first second; do
+            python3 scripts/prepare-mcpb.py \
+              --binary target/release/sippion \
+              --platform linux \
+              --version "$version" \
+              --output-dir "/tmp/sippion-mcpb-repro/$pass"
+            npx --yes @anthropic-ai/mcpb@2.1.2 validate "/tmp/sippion-mcpb-repro/$pass"
+            npx --yes @anthropic-ai/mcpb@2.1.2 pack \
+              "/tmp/sippion-mcpb-repro/$pass" \
+              "/tmp/sippion-mcpb-repro/$pass.raw.mcpb"
+            python3 scripts/canonicalize-mcpb.py \
+              --input "/tmp/sippion-mcpb-repro/$pass.raw.mcpb" \
+              --output "/tmp/sippion-mcpb-repro/$pass.mcpb"
+            npx --yes @anthropic-ai/mcpb@2.1.2 info "/tmp/sippion-mcpb-repro/$pass.mcpb" >/dev/null
+          done
+          sha256sum /tmp/sippion-mcpb-repro/first.mcpb /tmp/sippion-mcpb-repro/second.mcpb
+          cmp /tmp/sippion-mcpb-repro/first.mcpb /tmp/sippion-mcpb-repro/second.mcpb
 
   pr-binding:
     name: Bind PR base/head for auto-merge
@@ -127,8 +155,11 @@ jobs:
   security-audit:
     name: RustSec dependency audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     permissions:
+      actions: read
       contents: read
+      pull-requests: read
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,3 +177,62 @@ jobs:
 
       - name: Enforce dependency licenses and sources
         run: cargo deny check licenses sources bans
+
+      - name: Require release smoke for release-sensitive pull requests
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed_files=$(gh api --paginate \
+            "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+            --jq '.[].filename')
+          release_sensitive=0
+          while IFS= read -r path; do
+            case "$path" in
+              Cargo.toml|Cargo.lock|scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|scripts/prepare-mcpb.py|scripts/canonicalize-mcpb.py|scripts/generate-server-json.py|.github/workflows/mcp-registry-publish.yml|.github/workflows/release-build.yml|.github/workflows/release-draft.yml|.github/workflows/release-supply-chain-smoke.yml)
+                release_sensitive=1
+                ;;
+            esac
+          done <<<"$changed_files"
+          if [ "$release_sensitive" -eq 0 ]; then
+            echo "No release-sensitive paths changed."
+            exit 0
+          fi
+
+          echo "Release-sensitive change detected; waiting for exact-head release supply-chain smoke."
+          for attempt in $(seq 1 180); do
+            runs_json=$(gh api \
+              "repos/$REPOSITORY/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100")
+            run=$(jq -c \
+              --arg head "$HEAD_SHA" '
+                [ .workflow_runs[]
+                  | select(
+                      .path == ".github/workflows/release-supply-chain-smoke.yml"
+                      and .head_sha == $head
+                      and .event == "pull_request"
+                    )
+                ]
+                | sort_by(.created_at)
+                | last // empty
+              ' <<<"$runs_json")
+            if [ -n "$run" ]; then
+              status=$(jq -r '.status' <<<"$run")
+              conclusion=$(jq -r '.conclusion // ""' <<<"$run")
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
+                  echo "Exact-head release supply-chain smoke succeeded."
+                  exit 0
+                fi
+                echo "Release supply-chain smoke completed with conclusion=$conclusion" >&2
+                exit 1
+              fi
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for release supply-chain smoke for $HEAD_SHA" >&2
+          exit 1

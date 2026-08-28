@@ -5,6 +5,8 @@ import os
 import shutil
 from pathlib import Path
 
+NORMALIZED_MTIME = 946684800  # 2000-01-01T00:00:00Z
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--binary', required=True)
 parser.add_argument('--platform', choices=['linux', 'darwin', 'win32'], required=True)
@@ -17,9 +19,8 @@ server = output / 'server'
 server.mkdir(parents=True, exist_ok=True)
 binary_name = 'sippion.exe' if args.platform == 'win32' else 'sippion'
 destination = server / binary_name
-shutil.copy2(args.binary, destination)
-if args.platform != 'win32':
-    os.chmod(destination, 0o755)
+shutil.copyfile(args.binary, destination)
+os.chmod(destination, 0o755)
 
 manifest = {
     'manifest_version': '0.3',
@@ -57,4 +58,16 @@ manifest = {
         },
     },
 }
-(output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+manifest_path = output / 'manifest.json'
+manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+os.chmod(manifest_path, 0o644)
+
+# MCPB is a ZIP-based package. Normalize source metadata so repeated packs of the
+# same binary and manifest produce byte-for-byte identical bundles on the pinned
+# release runner/toolchain instead of inheriting artifact download timestamps.
+for path in sorted(output.rglob('*'), key=lambda item: len(item.parts), reverse=True):
+    if path.is_dir():
+        os.chmod(path, 0o755)
+    os.utime(path, (NORMALIZED_MTIME, NORMALIZED_MTIME), follow_symlinks=False)
+os.chmod(output, 0o755)
+os.utime(output, (NORMALIZED_MTIME, NORMALIZED_MTIME), follow_symlinks=False)
