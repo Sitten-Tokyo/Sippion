@@ -1,0 +1,24 @@
+{
+  "minRecallAt5": 1.0,
+  "minMrr": 0.75,
+  "minExpectedPathRecallAt5": 0.9,
+  "minPackedExpectedPathRecall": 0.9,
+  "minRequiredAnchorRecall": 1.0,
+  "maxAverageEstimatedTokens": 2000,
+  "maxP95EstimatedTokens": 2600,
+  "maxAverageUnnecessaryFileRatio": 0.9,
+  "maxP95LatencyMs": 6000,
+  "minAverageTokenSavings": 0.85,
+  "minRelevantPathsPer1kTokens": 0.3,
+  "minEvidenceAnchorsPer1kTokens": 0.3,
+  "cases": [
+    {"name":"engine-diagnostics","query":"repository engine context diagnostics","expectedPaths":["src/service/engine.rs","src/service.rs"],"requiredAnchors":["RepositoryEngine","ContextDiagnostics"],"maxReturnedBytes":16384,"maxEstimatedTokens":3000},
+    {"name":"unicode-retrieval","query":"unicode search fold token","expectedPaths":["src/core.rs"],"requiredAnchors":["unicode_search_fold"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
+    {"name":"fingerprint-consistency","query":"source fingerprint stale evidence","expectedPaths":["src/repo/ranking.rs","src/repo/map.rs"],"requiredAnchors":["source_content_fingerprint"],"maxReturnedBytes":16384,"maxEstimatedTokens":3000},
+    {"name":"adaptive-rarity","query":"adaptive rarity confidence document frequency","expectedPaths":["src/repo/adaptive.rs"],"requiredAnchors":["normalized_idf_rarity"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
+    {"name":"semantic-import-neighbor","query":"semantic import expansion neighbor","expectedPaths":["src/repo/map.rs"],"requiredAnchors":["semantic_expansion_paths"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
+    {"name":"redaction-oversize","query":"secret redaction oversize line","expectedPaths":["src/repo/redaction.rs"],"requiredAnchors":["REDACTED_OVERSIZE_LINE"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
+    {"name":"mcp-cancel","query":"mcp cancellation inflight response","expectedPaths":["src/mcp.rs"],"requiredAnchors":["InflightRequest"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
+    {"name":"root-project-safety","query":"root project marker secure","expectedPaths":["src/root.rs"],"requiredAnchors":["PROJECT_MARKERS"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600}
+  ]
+}
