@@ -1,0 +1,72 @@
+name: Temporary second-audit patch validation
+
+on:
+  push:
+    branches:
+      - fix/close-second-audit-gaps
+
+permissions:
+  contents: write
+
+concurrency:
+  group: second-audit-patch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-and-validate:
+    if: github.repository == 'Sitten-Tokyo/Sippion'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply deterministic hardening patch
+        run: python3 scripts/apply_post_audit_hardening.py
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Resolve lockfile and compile
+        run: cargo check
+
+      - name: Format Rust sources
+        run: cargo fmt
+
+      - name: Verify locked build
+        run: cargo check --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Install pinned cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Check dependency policy
+        run: cargo deny check licenses sources bans
+
+      - name: Reject whitespace errors
+        run: git diff --check
+
+      - name: Commit generated lockfile, formatting, and patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Apply second-audit hardening"
+          git push origin HEAD:fix/close-second-audit-gaps
