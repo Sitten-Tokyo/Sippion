@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           sed -i 's/Sippion exposes one tool/It exposes one tool/' scripts/apply_quality_features.py
           python3 scripts/apply_quality_features.py
-          python3 -c 'from pathlib import Path; files=["src/main.rs","scripts/retrieval-eval.py","scripts/mcp-conformance.mjs","scripts/prepare-mcpb.py","scripts/generate-server-json.py",".github/workflows/mcp-registry-publish.yml"]; [(p:=Path(f)).write_text(p.read_text(encoding="utf-8").removeprefix("\\\n"), encoding="utf-8") for f in files]'
+          python3 -c 'from pathlib import Path; import textwrap; files=["src/main.rs","scripts/retrieval-eval.py","scripts/mcp-conformance.mjs","scripts/prepare-mcpb.py","scripts/generate-server-json.py",".github/workflows/mcp-registry-publish.yml"]; [(p:=Path(f)).write_text(textwrap.dedent(p.read_text(encoding="utf-8").removeprefix("\\\n")), encoding="utf-8") for f in files]'
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
