@@ -45,6 +45,10 @@ const ADAPTIVE_CONFIDENCE_STOP: f64 = 0.78;
 const MAX_ANALYSIS_CACHE_FILES: usize = 256;
 const MAX_GRAPH_CACHE_ENTRIES: usize = 64;
 const MAX_SESSION_MEMORY_RECORDS: usize = 128;
+/// Request-local source reuse is deliberately limited to small verified candidates. These snapshots
+/// never enter a RepositoryAccess field or cross-request cache and disappear with one repo_context
+/// call. Larger files keep the existing re-read path instead of increasing transient memory sharply.
+const MAX_REQUEST_SNAPSHOT_SOURCE_BYTES: usize = 512 * 1024;
 // Structural-map redaction must not amplify a bounded source file into a much larger retained
 // buffer. Bounded redaction also refuses to run the allocating per-line redactors over an
 // attacker-controlled giant/minified line; that line is suppressed instead.
@@ -182,6 +186,12 @@ pub struct SearchOutcome {
     adaptive_expandable: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct OptimizedSearchOutcome {
+    pub(crate) outcome: SearchOutcome,
+    pub(crate) snapshots: HashMap<String, Arc<str>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SourceStamp {
     len: u64,
@@ -283,6 +293,9 @@ struct VerifiedCandidate {
     document_len: usize,
     term_frequencies: Vec<usize>,
     evidence: VerifiedEvidence,
+    /// Optional request-local source snapshot for avoiding a second full read during structural
+    /// mapping. This is never stored in RepositoryAccess and is capped per file.
+    snapshot_source: Option<Arc<str>>,
 }
 
 #[derive(Debug, Default)]
@@ -475,6 +488,7 @@ impl Drop for AnalysisFlightGuard<'_> {
 }
 
 mod access;
+mod adaptive;
 mod coordination;
 mod map;
 mod map_helpers;
