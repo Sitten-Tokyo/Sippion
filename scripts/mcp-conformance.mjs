@@ -10,6 +10,14 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function assertCompactContextContract(text) {
+  const header = text.split('\n').find((line) => line.includes('CTX v=4 '));
+  assert(header, 'compact CTX v=4 header missing');
+  assert(/\btarget_t=\d+\b/.test(header), 'compact context target token budget missing');
+  assert(/\bhard_b=\d+\b/.test(header), 'compact context hard byte budget missing');
+  assert(/\bscan_b=\d+\b/.test(header), 'compact context scan byte metadata missing');
+}
+
 async function runClient(options, expectedEra) {
   const client = new Client(
     { name: `sippion-conformance-${expectedEra}`, version: '1.0.0' },
@@ -34,7 +42,11 @@ async function runClient(options, expectedEra) {
     });
     const text = result.content?.find((item) => item.type === 'text')?.text ?? '';
     assert(text.includes('src/auth.rs'), 'repo_context did not return expected fixture path');
-    assert(text.includes('PACK adaptive=true'), 'bounded adaptive pack metadata missing');
+
+    // The assertions above exercise MCP negotiation, discovery, and tool invocation through the
+    // official client. This separate check guards Sippion's compact model-visible context contract;
+    // it intentionally does not depend on removed internal metadata such as `PACK adaptive=true`.
+    assertCompactContextContract(text);
   } finally {
     await client.close();
   }
@@ -45,4 +57,4 @@ await runClient(
   'modern',
 );
 await runClient({}, 'legacy');
-console.log('official MCP client conformance: modern + legacy stdio OK');
+console.log('official MCP client conformance: modern + legacy stdio + compact context OK');
