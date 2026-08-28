@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-cyclonedx --version '=0.5.9' --locked
-          cargo cyclonedx --format json --spec-version 1.5 --override-filename sippion.cdx.json
+          cargo cyclonedx --format json --spec-version 1.5 --override-filename sippion.cdx
           test -s sippion.cdx.json
           jq -e '.bomFormat == "CycloneDX" and .metadata.component.name == "sippion"' sippion.cdx.json >/dev/null
 
