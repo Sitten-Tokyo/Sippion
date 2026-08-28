@@ -1,0 +1,27 @@
+name: Apply context follow-up patch
+on:
+  push:
+    branches: [feature/context-efficiency-overhaul]
+    paths: [.github/workflows/context-followup-patch.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          fetch-depth: 0
+      - run: python3 scripts/apply-context-followup-patch.py
+      - uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt
+      - run: cargo fmt && cargo test --locked repo::map::optimized_tests && git diff --check
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/context-followup-patch.yml scripts/apply-context-followup-patch.py
+          git add src/repo/map.rs src/repo/access.rs src/repo.rs
+          git commit -m "Harden structural cache identity and import resolution"
+          git push origin HEAD:feature/context-efficiency-overhaul
