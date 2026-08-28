@@ -630,6 +630,9 @@ impl RepositoryAccess {
         hit: &SearchHit,
         snapshots: &HashMap<String, Arc<str>>,
     ) -> Result<Option<VerifiedSource>, RepositoryAccessError> {
+        #[cfg(windows)]
+        let _ = snapshots;
+
         #[cfg(not(windows))]
         if let (Some(snapshot), Some(expected_stamp)) = (
             snapshots.get(hit.relative_path.as_str()),
@@ -875,6 +878,9 @@ mod optimized_tests {
                 .iter()
                 .any(|entry| entry.relative_path == "dependency.rs")
         );
+        // RepositoryAccess owns a capability directory handle. Windows refuses to delete the
+        // temporary root while that handle is open, so release it before cleanup.
+        drop(repository);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
