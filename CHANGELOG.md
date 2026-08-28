@@ -7,9 +7,14 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 ### Changed
 
 - Repository context packing now explicitly optimizes utility per estimated model-input token, discounts redundant same-file atoms, and exposes typed retrieval/packing diagnostics without reparsing model-visible text.
+- Model-visible source evidence is line-framed as untrusted data so repository text cannot masquerade as top-level compact `CTX`, `S`, or `E` records.
+- The Rust runtime now exposes the canonical `heuristic-v3` token estimator through `sippion estimate-tokens`; retrieval evaluation and tokenizer calibration call that implementation instead of duplicating the formula in Python.
 - Adaptive retrieval confidence now uses exact evidence plus RAM-index document-frequency rarity instead of treating shorter queries as inherently more specific.
-- Semantic/import expansion now resolves ambiguous same-stem candidates deterministically using module match, directory proximity, language/extension affinity, and path tie-breaking.
-- Retrieval evaluation now separates search ranking from packed model-visible paths and compares token cost against full-source, top-ranked-full-file, and deterministic grep-window baselines.
+- Semantic/import expansion now resolves ambiguous candidates deterministically and adds language-aware import normalization/module aliases for Rust, Python, JavaScript/TypeScript, Go, Java, C#, C, and C++ conventions.
+- Windows continues to re-read source and reset the lexical RAM index conservatively, while verified structural analysis and graph caches can now be reused safely through content-fingerprint-derived cache identities.
+- Retrieval evaluation now separates search ranking from packed model-visible paths, requires configured evidence anchors to survive packing, and compares token cost against full-source, top-ranked-full-file, and deterministic grep-window baselines.
+- Self-hosted evaluation is split into training and whole-repository holdout suites; CI excludes `eval/` from the holdout repository to prevent evaluation leakage.
+- Offline `scripts/tune-context.py` explores named packer/adaptive constants on temporary checkouts, selects from training metrics only, reports a Pareto frontier, and evaluates holdout data only after selection.
 - Release-sensitive pull requests now keep the required `RustSec dependency audit` check pending until the exact-head release supply-chain smoke succeeds, so manual and automated merges share the same release gate.
 - Official MCP Registry publishing now verifies the exact published record through the stable `/v0.1` API, including active status and package metadata, and confirms newly released versions are `latest`.
 - Retrieval evaluation now covers natural-language queries, ambiguous lexical noise, and cross-file evidence, with expected-path recall, unnecessary-file ratio, latency, and context-size regression gates.
@@ -19,6 +24,7 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 ### Documentation
 
 - State explicitly that Sippion organizes and bounds repository context before it is passed to AI models in order to reduce unnecessary model-input token consumption.
+- Document the canonical token estimator, evidence framing, train/holdout evaluation boundary, offline parameter tuning, language-aware import expansion, and conservative Windows cache policy.
 - Document the Official MCP Registry name and per-platform MCPB distribution in the README.
 
 ## [0.1.0-rc.36] - 2026-08-28
