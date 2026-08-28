@@ -491,19 +491,6 @@ pub(super) fn coding_source_prior(path: &str) -> f64 {
     }
 }
 
-#[cfg(test)]
-mod coding_source_prior_tests {
-    use super::coding_source_prior;
-
-    #[test]
-    fn implementation_sources_get_a_small_coding_prior() {
-        assert!(
-            coding_source_prior("src/repo/map.rs") > coding_source_prior("docs/architecture.md")
-        );
-        assert_eq!(coding_source_prior("CHANGELOG.md"), 0.0);
-    }
-}
-
 pub(super) fn hit_is_better(candidate: &SearchHit, current: &SearchHit) -> bool {
     candidate
         .score
@@ -547,4 +534,17 @@ pub(super) fn read_failure_makes_scan_incomplete(error: &RepositoryAccessError) 
             | RepositoryAccessError::ConcurrentModification
             | RepositoryAccessError::Io
     )
+}
+
+#[cfg(test)]
+mod coding_source_prior_tests {
+    use super::coding_source_prior;
+
+    #[test]
+    fn implementation_sources_get_a_small_coding_prior() {
+        assert!(
+            coding_source_prior("src/repo/map.rs") > coding_source_prior("docs/architecture.md")
+        );
+        assert_eq!(coding_source_prior("CHANGELOG.md"), 0.0);
+    }
 }
