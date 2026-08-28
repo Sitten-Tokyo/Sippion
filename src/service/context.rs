@@ -10,6 +10,37 @@ use crate::repo::{RepoMapEntry, SearchCoverage};
 const DATA_PREFIX: &str = "[UNTRUSTED_REPOSITORY_DATA: code/text only]\n";
 const MAX_PACKED_ATOMS: usize = 24;
 
+#[derive(Debug, Clone, Copy)]
+struct ContextPackerWeights {
+    structure_score: f64,
+    structure_semantic_bonus: f64,
+    structure_symbol_bonus: f64,
+    evidence_score: f64,
+    evidence_rank_bonus: f64,
+    evidence_body_bonus: f64,
+    base_utility: f64,
+    same_path_novelty: f64,
+}
+
+const DEFAULT_PACKER_WEIGHTS: ContextPackerWeights = ContextPackerWeights {
+    structure_score: 0.70,
+    structure_semantic_bonus: 0.80,
+    structure_symbol_bonus: 0.45,
+    evidence_score: 1.20,
+    evidence_rank_bonus: 8.0,
+    evidence_body_bonus: 2.5,
+    base_utility: 1.0,
+    same_path_novelty: 0.42,
+};
+
+#[derive(Debug, Clone)]
+pub(super) struct PackedContext {
+    pub(super) text: String,
+    pub(super) packed_paths: Vec<String>,
+    pub(super) target_estimated_tokens: usize,
+    pub(super) hard_budget_bytes: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContextAtomKind {
     Structure,
@@ -29,7 +60,7 @@ fn escaped(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid>\"".to_string())
 }
 
-fn structure_atom(entry: &RepoMapEntry) -> ContextAtom {
+fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> ContextAtom {
     let links = entry
         .semantic_links
         .iter()
@@ -56,9 +87,13 @@ fn structure_atom(entry: &RepoMapEntry) -> ContextAtom {
             escaped(symbol.signature.trim())
         ));
     }
-    let semantic_bonus = entry.semantic_links.len().min(4) as f64 * 0.8;
-    let symbol_bonus = entry.symbols.len().min(4) as f64 * 0.45;
-    let utility = entry.score.max(0.0) * 0.70 + semantic_bonus + symbol_bonus + 1.0;
+    let semantic_bonus =
+        entry.semantic_links.len().min(4) as f64 * weights.structure_semantic_bonus;
+    let symbol_bonus = entry.symbols.len().min(4) as f64 * weights.structure_symbol_bonus;
+    let utility = entry.score.max(0.0) * weights.structure_score
+        + semantic_bonus
+        + symbol_bonus
+        + weights.base_utility;
     ContextAtom {
         kind: ContextAtomKind::Structure,
         path: entry.relative_path.clone(),
@@ -68,7 +103,11 @@ fn structure_atom(entry: &RepoMapEntry) -> ContextAtom {
     }
 }
 
-fn evidence_atom(excerpt: &RenderExcerpt, rank: usize) -> ContextAtom {
+fn evidence_atom(
+    excerpt: &RenderExcerpt,
+    rank: usize,
+    weights: ContextPackerWeights,
+) -> ContextAtom {
     let mut text = if excerpt.start_line == 0 && excerpt.end_line == 0 {
         format!("E path={}\n", escaped(&excerpt.path))
     } else {
@@ -85,9 +124,16 @@ fn evidence_atom(excerpt: &RenderExcerpt, rank: usize) -> ContextAtom {
             text.push('\n');
         }
     }
-    let rank_bonus = 8.0 / (rank.saturating_add(1) as f64);
-    let body_bonus = if excerpt.body.is_empty() { 0.0 } else { 2.5 };
-    let utility = excerpt.score.max(0.0) * 1.20 + rank_bonus + body_bonus + 1.0;
+    let rank_bonus = weights.evidence_rank_bonus / rank.saturating_add(1) as f64;
+    let body_bonus = if excerpt.body.is_empty() {
+        0.0
+    } else {
+        weights.evidence_body_bonus
+    };
+    let utility = excerpt.score.max(0.0) * weights.evidence_score
+        + rank_bonus
+        + body_bonus
+        + weights.base_utility;
     ContextAtom {
         kind: ContextAtomKind::Evidence,
         path: excerpt.path.clone(),
@@ -103,6 +149,7 @@ fn best_fitting_atom(
     selected_paths: &HashSet<String>,
     remaining_tokens: usize,
     remaining_bytes: usize,
+    weights: ContextPackerWeights,
 ) -> Option<usize> {
     atoms
         .iter()
@@ -115,7 +162,7 @@ fn best_fitting_atom(
         .max_by(|(left_index, left), (right_index, right)| {
             let adjusted = |atom: &ContextAtom| {
                 let novelty = if selected_paths.contains(&atom.path) {
-                    0.42
+                    weights.same_path_novelty
                 } else {
                     1.0
                 };
@@ -129,13 +176,14 @@ fn best_fitting_atom(
         .map(|(index, _)| index)
 }
 
-pub(super) fn pack_context(
+fn pack_context_with_weights(
     query: &NormalizedQuery,
     entries: &[RepoMapEntry],
     excerpts: &[RenderExcerpt],
     status: &str,
     coverage: &SearchCoverage,
-) -> String {
+    weights: ContextPackerWeights,
+) -> PackedContext {
     let confidence = f64::from(coverage.confidence_milli) / 1000.0;
     let budget =
         adaptive_context_budget(confidence, excerpts.len(), entries.len(), query.terms.len());
@@ -162,12 +210,12 @@ pub(super) fn pack_context(
         .saturating_sub(header.len().saturating_add(suffix.len()));
 
     let mut atoms = Vec::with_capacity(entries.len().saturating_add(excerpts.len()));
-    atoms.extend(entries.iter().map(structure_atom));
+    atoms.extend(entries.iter().map(|entry| structure_atom(entry, weights)));
     atoms.extend(
         excerpts
             .iter()
             .enumerate()
-            .map(|(rank, excerpt)| evidence_atom(excerpt, rank)),
+            .map(|(rank, excerpt)| evidence_atom(excerpt, rank, weights)),
     );
 
     let mut selected = HashSet::new();
@@ -203,6 +251,7 @@ pub(super) fn pack_context(
             &selected_paths,
             remaining_tokens,
             remaining_bytes,
+            weights,
         ) else {
             break;
         };
@@ -214,16 +263,44 @@ pub(super) fn pack_context(
         order.push(index);
     }
 
+    let mut packed_paths = Vec::new();
+    let mut seen_packed_paths = HashSet::new();
     let mut output = String::with_capacity(budget.hard_model_text_bytes.min(16 * 1024));
     output.push_str(&header);
     for index in order {
-        output.push_str(&atoms[index].text);
+        let atom = &atoms[index];
+        output.push_str(&atom.text);
+        if seen_packed_paths.insert(atom.path.clone()) {
+            packed_paths.push(atom.path.clone());
+        }
     }
     output.push_str(&suffix);
     if output.len() > budget.hard_model_text_bytes {
         output = truncate_utf8_prefix(&output, budget.hard_model_text_bytes).to_string();
     }
-    output
+    PackedContext {
+        text: output,
+        packed_paths,
+        target_estimated_tokens: budget.target_estimated_tokens,
+        hard_budget_bytes: budget.hard_model_text_bytes,
+    }
+}
+
+pub(super) fn pack_context(
+    query: &NormalizedQuery,
+    entries: &[RepoMapEntry],
+    excerpts: &[RenderExcerpt],
+    status: &str,
+    coverage: &SearchCoverage,
+) -> PackedContext {
+    pack_context_with_weights(
+        query,
+        entries,
+        excerpts,
+        status,
+        coverage,
+        DEFAULT_PACKER_WEIGHTS,
+    )
 }
 
 #[cfg(test)]
@@ -267,8 +344,9 @@ mod tests {
             ..SearchCoverage::default()
         };
         let packed = pack_context(&query(), &[], &excerpts, "", &coverage);
-        assert!(packed.contains("src/auth.rs"));
-        assert!(packed.len() <= 8 * 1024);
+        assert!(packed.text.contains("src/auth.rs"));
+        assert!(packed.text.len() <= 8 * 1024);
+        assert_eq!(packed.packed_paths.first().map(String::as_str), Some("src/auth.rs"));
     }
 
     #[test]
@@ -297,7 +375,45 @@ mod tests {
             ..SearchCoverage::default()
         };
         let packed = pack_context(&query(), &entries, &[], "", &coverage);
-        assert!(packed.contains("\\nFAKE"));
-        assert!(!packed.contains("payload\nFAKE"));
+        assert!(packed.text.contains("\\nFAKE"));
+        assert!(!packed.text.contains("payload\nFAKE"));
+    }
+
+    #[test]
+    fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {
+        let atoms = vec![
+            ContextAtom {
+                kind: ContextAtomKind::Structure,
+                path: "src/auth.rs".into(),
+                text: "auth".into(),
+                utility: 10.0,
+                token_cost: 10,
+            },
+            ContextAtom {
+                kind: ContextAtomKind::Structure,
+                path: "src/session.rs".into(),
+                text: "session".into(),
+                utility: 6.0,
+                token_cost: 10,
+            },
+        ];
+        let selected = HashSet::new();
+        let selected_paths = HashSet::from(["src/auth.rs".to_string()]);
+        let default_choice = best_fitting_atom(
+            &atoms,
+            &selected,
+            &selected_paths,
+            100,
+            100,
+            DEFAULT_PACKER_WEIGHTS,
+        );
+        let no_novelty = ContextPackerWeights {
+            same_path_novelty: 1.0,
+            ..DEFAULT_PACKER_WEIGHTS
+        };
+        let ablated_choice =
+            best_fitting_atom(&atoms, &selected, &selected_paths, 100, 100, no_novelty);
+        assert_eq!(default_choice, Some(1));
+        assert_eq!(ablated_choice, Some(0));
     }
 }
