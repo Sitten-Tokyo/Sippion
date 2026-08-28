@@ -63,30 +63,54 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         return 0.0;
     }
     let definition_markers = [
-        "fn ",
+        "pub async fn ",
         "pub fn ",
+        "async fn ",
+        "fn ",
+        "async def ",
         "def ",
-        "class ",
-        "struct ",
-        "enum ",
-        "trait ",
-        "interface ",
-        "func ",
-        "type ",
-        "function ",
+        "export async function ",
         "export function ",
+        "function ",
+        "func ",
+        "pub struct ",
+        "struct ",
+        "pub enum ",
+        "enum ",
+        "pub trait ",
+        "trait ",
+        "export interface ",
+        "interface ",
+        "pub class ",
         "export class ",
-        "impl ",
-        "mod ",
+        "class ",
+        "pub type ",
+        "type ",
+        "pub const ",
         "const ",
+        "pub static ",
         "static ",
+        "pub mod ",
+        "mod ",
     ];
-    if definition_markers
+    if let Some(marker) = definition_markers
         .iter()
-        .any(|marker| lower.starts_with(marker))
+        .find(|marker| lower.starts_with(**marker))
     {
-        5.0
-    } else if ["use ", "import ", "from ", "require(", "#include"]
+        let rest = lower[marker.len()..].trim_start();
+        let end = rest
+            .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
+            .unwrap_or(rest.len());
+        let identifier = &rest[..end];
+        let ownership_match = !identifier.is_empty()
+            && terms
+                .iter()
+                .all(|term| identifier.contains(term.as_str()));
+        // Definition ownership is stronger evidence than repeated call/import references. This
+        // prevents BM25 term frequency from making a caller outrank the symbol's defining file.
+        return if ownership_match { 14.0 } else { 6.0 };
+    }
+    if ["use ", "import ", "from ", "require(", "#include"]
         .iter()
         .any(|marker| lower.starts_with(marker))
     {
@@ -249,6 +273,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn definition_ownership_outranks_import_and_call_references() {
+        let symbol = vec!["validate_session_token".to_string()];
+        let natural = vec![
+            "session".to_string(),
+            "token".to_string(),
+            "validate".to_string(),
+        ];
+        assert!(
+            structural_line_bonus("pub fn validate_session_token(token: &str) -> bool {", &symbol)
+                > structural_line_bonus("use crate::auth::validate_session_token;", &symbol)
+        );
+        assert!(
+            structural_line_bonus("pub fn validate_session_token(token: &str) -> bool {", &natural)
+                > structural_line_bonus("validate_session_token(token)", &natural)
+        );
+    }
+
+    #[test]
     fn bm25_prefers_repeated_rare_term() {
         let df = [1, 2];
         let a = bm25_score(&[3, 1], 20, 20.0, &df, 10);
@@ -289,6 +331,7 @@ mod tests {
         let call_rank = weighted_pagerank(&call_only, 20);
         assert!(call_rank[1] > lexical_rank[1]);
     }
+
     #[test]
     fn term_statistics_treats_composed_and_decomposed_tokens_equally() {
         let term = crate::core::unicode_search_fold("CAFÉAuth");
