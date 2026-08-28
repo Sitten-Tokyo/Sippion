@@ -26,36 +26,29 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           path = Path('.github/workflows/ci.yml')
-          text = path.read_text(encoding='utf-8')
-          old = '''      - name: Run self-hosted token efficiency evaluation
-        if: runner.os == 'Linux'
-        run: |
-          python3 scripts/retrieval-eval.py \\
-            --binary target/release/sippion \\
-            --cases eval/self_cases.json \\
-            --fixture . \\
-            --baseline-root .
-'''
-          new = '''      - name: Run self-hosted token efficiency evaluation
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          self_root="$RUNNER_TEMP/sippion-self-eval"
-          rm -rf "$self_root"
-          mkdir -p "$self_root"
-          cp -R src "$self_root/src"
-          python3 scripts/retrieval-eval.py \\
-            --binary target/release/sippion \\
-            --cases eval/self_cases.json \\
-            --fixture "$self_root" \\
-            --baseline-root "$self_root"
-'''
-          if new not in text:
-              if old not in text:
-                  raise SystemExit('permanent self-eval CI anchor not found')
-              text = text.replace(old, new, 1)
-              path.write_text(text, encoding='utf-8')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          start = lines.index('      - name: Run self-hosted token efficiency evaluation')
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith('      - name:'))
+          replacement = [
+              '      - name: Run self-hosted token efficiency evaluation',
+              "        if: runner.os == 'Linux'",
+              '        shell: bash',
+              '        run: |',
+              '          set -euo pipefail',
+              '          self_root="$RUNNER_TEMP/sippion-self-eval"',
+              '          rm -rf "$self_root"',
+              '          mkdir -p "$self_root"',
+              '          cp -R src "$self_root/src"',
+              '          python3 scripts/retrieval-eval.py \\',
+              '            --binary target/release/sippion \\',
+              '            --cases eval/self_cases.json \\',
+              '            --fixture "$self_root" \\',
+              '            --baseline-root "$self_root"',
+              '',
+          ]
+          if lines[start:end] != replacement:
+              lines[start:end] = replacement
+              path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           if git diff --quiet; then
             echo "Permanent CI already aligned."
