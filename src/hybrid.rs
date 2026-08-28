@@ -55,6 +55,19 @@ pub fn bm25_score(
         .sum()
 }
 
+fn strongest_identifier_term_match(line: &str, terms: &[String]) -> usize {
+    line.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
+        .filter(|identifier| !identifier.is_empty())
+        .map(|identifier| {
+            terms
+                .iter()
+                .filter(|term| identifier.contains(term.as_str()))
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 #[must_use]
 pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     let trimmed = line.trim_start();
@@ -62,6 +75,19 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     if !terms.iter().any(|term| lower.contains(term)) {
         return 0.0;
     }
+
+    // Rust restricted visibility (`pub(super)`, `pub(crate)`, `pub(in path)`) describes the
+    // ownership boundary, not a different declaration kind. Strip that prefix only for
+    // declaration detection so the same scoring works for ordinary and restricted definitions.
+    let definition_source = if lower.starts_with("pub(") {
+        lower
+            .find(") ")
+            .map(|end| lower[end + 2..].trim_start())
+            .unwrap_or(lower.as_str())
+    } else {
+        lower.as_str()
+    };
+
     let definition_markers = [
         "pub async fn ",
         "pub fn ",
@@ -95,18 +121,37 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     ];
     if let Some(marker) = definition_markers
         .iter()
-        .find(|marker| lower.starts_with(**marker))
+        .find(|marker| definition_source.starts_with(**marker))
     {
-        let rest = lower[marker.len()..].trim_start();
+        let rest = definition_source[marker.len()..].trim_start();
         let end = rest
             .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
             .unwrap_or(rest.len());
         let identifier = &rest[..end];
-        let ownership_match =
-            !identifier.is_empty() && terms.iter().all(|term| identifier.contains(term.as_str()));
-        // Definition ownership is stronger evidence than repeated call/import references. This
-        // prevents BM25 term frequency from making a caller outrank the symbol's defining file.
-        return if ownership_match { 14.0 } else { 6.0 };
+        let identifier_matches = terms
+            .iter()
+            .filter(|term| identifier.contains(term.as_str()))
+            .count();
+        if identifier_matches == 0 {
+            return 6.0;
+        }
+        let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;
+        // Exact symbol queries keep the established ownership floor. Natural-language queries
+        // gain additional credit when several query concepts are owned by one identifier.
+        return if identifier_matches == terms.len() {
+            coverage_bonus.max(14.0)
+        } else {
+            coverage_bonus
+        }
+        .min(22.0);
+    }
+
+    // A compound identifier reference is weaker than its definition, but stronger than prose
+    // that merely repeats the same words. This helps implementation call sites survive broad
+    // repository searches without allowing repeated calls to outrank symbol ownership.
+    let identifier_matches = strongest_identifier_term_match(&lower, terms);
+    if identifier_matches >= 2 {
+        return identifier_matches as f64 * 3.0;
     }
     if ["use ", "import ", "from ", "require(", "#include"]
         .iter()
@@ -289,6 +334,33 @@ mod tests {
                 "pub fn validate_session_token(token: &str) -> bool {",
                 &natural
             ) > structural_line_bonus("validate_session_token(token)", &natural)
+        );
+    }
+
+    #[test]
+    fn natural_query_rewards_partial_identifier_ownership_and_references() {
+        let terms = vec![
+            "source".to_string(),
+            "fingerprint".to_string(),
+            "stale".to_string(),
+            "evidence".to_string(),
+        ];
+        let definition = structural_line_bonus(
+            "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",
+            &terms,
+        );
+        let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);
+        let prose = structural_line_bonus("source fingerprint stale evidence", &terms);
+        assert!(definition > reference);
+        assert!(reference > prose);
+    }
+
+    #[test]
+    fn restricted_rust_visibility_is_treated_as_definition_ownership() {
+        let terms = vec!["project".to_string(), "markers".to_string()];
+        assert!(
+            structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)
+                > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)
         );
     }
 
