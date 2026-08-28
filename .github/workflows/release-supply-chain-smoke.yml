@@ -10,6 +10,7 @@ on:
       - scripts/install.sh
       - scripts/install.ps1
       - scripts/prepare-mcpb.py
+      - scripts/canonicalize-mcpb.py
       - scripts/generate-server-json.py
       - .github/workflows/mcp-registry-publish.yml
       - .github/workflows/release-build.yml
@@ -102,7 +103,7 @@ jobs:
           set -euo pipefail
           version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
           tag="v$version"
-          mkdir -p mcpb-work registry-smoke
+          mkdir -p mcpb-work mcpb-raw registry-smoke reproducibility
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-linux-x86_64/sippion-linux-x86_64 --platform linux --version "$version" --output-dir mcpb-work/linux
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-windows-x86_64.exe/sippion-windows-x86_64.exe --platform win32 --version "$version" --output-dir mcpb-work/windows
           python3 scripts/prepare-mcpb.py --binary downloaded/sippion-macos-aarch64/sippion-macos-aarch64 --platform darwin --version "$version" --output-dir mcpb-work/macos-aarch64
@@ -115,9 +116,18 @@ jobs:
             dir=${spec%%:*}
             file=${spec#*:}
             npx --yes @anthropic-ai/mcpb@2.1.2 validate "mcpb-work/$dir"
-            npx --yes @anthropic-ai/mcpb@2.1.2 pack "mcpb-work/$dir" "registry-smoke/$file"
+            npx --yes @anthropic-ai/mcpb@2.1.2 pack "mcpb-work/$dir" "mcpb-raw/$file"
+            python3 scripts/canonicalize-mcpb.py --input "mcpb-raw/$file" --output "registry-smoke/$file"
+            npx --yes @anthropic-ai/mcpb@2.1.2 info "registry-smoke/$file" >/dev/null
             test -s "registry-smoke/$file"
           done
+
+          # Pack the same Linux input again. The official pack may stamp volatile ZIP metadata,
+          # but canonical release assets must be byte-for-byte reproducible.
+          npx --yes @anthropic-ai/mcpb@2.1.2 pack mcpb-work/linux reproducibility/linux.raw.mcpb
+          python3 scripts/canonicalize-mcpb.py --input reproducibility/linux.raw.mcpb --output reproducibility/linux.mcpb
+          cmp registry-smoke/sippion-linux-x86_64.mcpb reproducibility/linux.mcpb
+
           python3 scripts/generate-server-json.py --assets-dir registry-smoke --tag "$tag" --version "$version" --output registry-smoke/server.json
           curl --fail --location --silent --show-error \
             --output /tmp/mcp-publisher.tar.gz \
