@@ -24,35 +24,82 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Apply compact schema patch and format
+      - name: Align compact context diagnostics and format
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("src/core.rs")
-          text = path.read_text(encoding="utf-8")
-          old = '"description": "Single adaptive repository-context tool. Internally combines a RAM-only incremental lexical index, BM25, path/session-agent ranking, bounded shared Tree-sitter + source-only semantic analysis, a cached weighted structural graph, cross-agent diversity, deduplication, excerpt extraction, conservative compaction, and adaptive context packing.",'
-          new = '"description": "Find and pack small, relevant repository context for an AI coding task. Local, read-only, bounded, and token-aware.",'
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit("MCP description anchor not found")
-          text = text.replace(
-              '"RTK-style compression",\n                    "Repomix-style packing"',
-              '"conservative source compaction",\n                    "utility-per-token context packing"',
-              1,
-          )
-          path.write_text(text, encoding="utf-8")
+          context_path = Path("src/service/context.rs")
+          context = context_path.read_text(encoding="utf-8")
+          old_header = '''    let header = format!(
+              "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={}\\n",
+              usize::from(incomplete),
+              coverage.policy_excluded_files,
+              budget.target_estimated_tokens,
+          );'''
+          new_header = '''    let header = format!(
+              "{DATA_PREFIX}CTX v=4 confidence={confidence:.3} incomplete={} excluded={} target_t={} hard_b={} scan_b={}\\n",
+              usize::from(incomplete),
+              coverage.policy_excluded_files,
+              budget.target_estimated_tokens,
+              budget.hard_model_text_bytes,
+              coverage.scanned_bytes,
+          );'''
+          if old_header in context:
+              context = context.replace(old_header, new_header, 1)
+          elif " hard_b=" not in context:
+              raise SystemExit("compact context header anchor not found")
+          context_path.write_text(context, encoding="utf-8")
+
+          main_path = Path("src/main.rs")
+          main = main_path.read_text(encoding="utf-8")
+          start = main.index("fn query_diagnostic(context: &str) -> QueryDiagnostic {")
+          end = main.index("\nfn run_query_command", start)
+          replacement = r'''fn query_diagnostic(context: &str) -> QueryDiagnostic {
+              let mut ranked_files = Vec::new();
+              let mut hard_budget_bytes = None;
+              let mut target_estimated_tokens = None;
+              let mut scanned_bytes = None;
+              for line in context.lines() {
+                  if line.starts_with("CTX ") {
+                      hard_budget_bytes = parse_numeric_field(line, "hard_b=");
+                      target_estimated_tokens = parse_numeric_field(line, "target_t=");
+                      scanned_bytes = parse_numeric_field(line, "scan_b=");
+                  } else if let Some(rest) = line.strip_prefix("S path=") {
+                      if let Some((path_json, rest)) = rest.split_once(" rank=") {
+                          if let (Ok(path), Some(rank_text)) = (
+                              serde_json::from_str::<String>(path_json),
+                              rest.split_whitespace().next(),
+                          ) {
+                              if let Ok(rank) = rank_text.parse::<f64>() {
+                                  ranked_files.push(RankedFileDiagnostic { path, rank });
+                              }
+                          }
+                      }
+                  }
+              }
+              QueryDiagnostic {
+                  returned_bytes: context.len(),
+                  estimated_tokens: heuristic_v3_estimated_tokens(context),
+                  hard_budget_bytes,
+                  target_estimated_tokens,
+                  scanned_bytes,
+                  ranked_files,
+              }
+          }
+          '''
+          main = main[:start] + replacement.rstrip() + main[end:]
+          main_path.write_text(main, encoding="utf-8")
           PY
           cargo fmt
           if git diff --quiet; then
-            echo "Already patched and formatted."
+            echo "Already aligned and formatted."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src
-          git commit -m "Compact model-visible MCP context metadata"
+          git commit -m "Align query diagnostics with compact context format"
           git push origin HEAD:feature/context-efficiency-overhaul
