@@ -187,8 +187,10 @@ sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT --scan-budget-mib 128
 
 Retrieval starts with a RAM-only lexical index, parses only ranked candidates,
 adds bounded source-only semantic evidence, and packs verified excerpts into a
-bounded response. Search-term matching is Unicode-aware while filesystem safety
-policy remains deliberately separate and conservative.
+bounded response. Structural parsing currently covers Rust, Python,
+JavaScript/TypeScript, Go, Java, C#, C, and C++. Search-term matching is
+Unicode-aware while filesystem safety policy remains deliberately separate and
+conservative.
 
 Sippion is a repository-context tool, not a compiler or language server. It
 does not claim compiler-authoritative type resolution or LSP-grade references.

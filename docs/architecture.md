@@ -20,7 +20,7 @@ Retrieval is bounded and staged:
 
 1. lexical candidate retrieval uses a RAM-only incremental index, BM25/path
    ranking, and optional volatile `session_id` / `agent_id` coordination;
-2. Tree-sitter parses only already-ranked candidates for supported languages;
+2. Tree-sitter parses only already-ranked Rust, Python, JavaScript/TypeScript, Go, Java, C#, C, and C++ candidates;
 3. source-only references, calls, types, implementations, and imports provide
    ranking evidence;
 4. verified excerpts and structural summaries are packed into a bounded

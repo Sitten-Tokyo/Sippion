@@ -18,6 +18,10 @@ Sippion uses third-party Rust crates. The source archive does not vendor those c
 | `tree-sitter-javascript` | JavaScript/JSX grammar | MIT |
 | `tree-sitter-typescript` | TypeScript/TSX grammar | MIT |
 | `tree-sitter-go` | Go grammar | MIT |
+| `tree-sitter-java` 0.23.5 | Java grammar | MIT |
+| `tree-sitter-c-sharp` 0.23.5 | C# grammar | MIT |
+| `tree-sitter-c` 0.24.2 | C grammar | MIT |
+| `tree-sitter-cpp` 0.23.4 | C++ grammar | MIT |
 | `winapi-util` 0.1.11 (Windows only) | safe open-handle file metadata / hard-link count | Unlicense OR MIT |
 
 ## Release requirement
