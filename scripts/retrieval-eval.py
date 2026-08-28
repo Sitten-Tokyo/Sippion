@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import math
 import statistics
 import subprocess
 import time
@@ -28,10 +27,23 @@ def percentile(values, p):
     return ordered[low] * (1 - fraction) + ordered[high] * fraction
 
 
-def estimated_tokens(text):
-    encoded = text.encode("utf-8")
-    non_ascii = sum(1 for ch in text if not ch.isascii())
-    return math.ceil((len(encoded) + non_ascii * 2) / 3)
+def estimated_tokens(binary, text, cache):
+    cached = cache.get(text)
+    if cached is not None:
+        return cached
+    proc = subprocess.run(
+        [binary, "estimate-tokens", "--json"],
+        input=text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"canonical token estimator failed: {proc.stderr.strip()}")
+    value = int(json.loads(proc.stdout)["estimatedTokens"])
+    cache[text] = value
+    return value
 
 
 def source_corpus(root):
@@ -56,11 +68,15 @@ def source_corpus(root):
     return sources
 
 
-def full_source_baseline(sources):
-    return max(sum(estimated_tokens(text) for text in sources.values()), 1), len(sources)
+def joined_token_cost(binary, texts, cache):
+    return max(estimated_tokens(binary, "\n".join(texts), cache), 1)
 
 
-def top_k_full_files_baseline(sources, ranked_paths, k=5):
+def full_source_baseline(binary, sources, cache):
+    return joined_token_cost(binary, sources.values(), cache), len(sources)
+
+
+def top_k_full_files_baseline(binary, sources, ranked_paths, cache, k=5):
     selected = []
     seen = set()
     for path in ranked_paths:
@@ -70,11 +86,11 @@ def top_k_full_files_baseline(sources, ranked_paths, k=5):
         seen.add(path)
         if len(selected) >= k:
             break
-    tokens = sum(estimated_tokens(sources[path]) for path in selected)
-    return max(tokens, 1), selected
+    tokens = joined_token_cost(binary, (sources[path] for path in selected), cache)
+    return tokens, selected
 
 
-def grep_window_baseline(sources, query, max_files=5, radius=4):
+def grep_window_baseline(binary, sources, query, cache, max_files=5, radius=4):
     terms = [part.casefold() for part in query.split() if len(part) >= 2]
     if not terms:
         return 1, []
@@ -101,8 +117,8 @@ def grep_window_baseline(sources, query, max_files=5, radius=4):
         candidates.append((score, path, window))
     candidates.sort(key=lambda item: (-item[0], item[1]))
     selected = candidates[:max_files]
-    tokens = sum(estimated_tokens(window) for _, _, window in selected)
-    return max(tokens, 1), [path for _, path, _ in selected]
+    tokens = joined_token_cost(binary, (window for _, _, window in selected), cache)
+    return tokens, [path for _, path, _ in selected]
 
 
 def main():
@@ -115,7 +131,8 @@ def main():
     config = json.loads(Path(args.cases).read_text(encoding="utf-8"))
     baseline_root = args.baseline_root or args.fixture
     sources = source_corpus(baseline_root)
-    baseline_tokens, baseline_files = full_source_baseline(sources)
+    token_cache = {}
+    baseline_tokens, baseline_files = full_source_baseline(args.binary, sources, token_cache)
 
     results = []
     failures = []
@@ -124,10 +141,14 @@ def main():
     expected_path_hits = 0
     expected_path_total = 0
     packed_expected_path_hits = 0
+    required_anchor_hits = 0
+    required_anchor_total = 0
 
     for case in config["cases"]:
         expected = set(case["expectedPaths"])
+        required_anchors = case.get("requiredAnchors", [])
         expected_path_total += len(expected)
+        required_anchor_total += len(required_anchors)
         started = time.perf_counter()
         proc = subprocess.run(
             [args.binary, "query", "--root", args.fixture, "--json", "--", case["query"]],
@@ -142,12 +163,16 @@ def main():
             reciprocal_ranks.append(0.0)
             continue
         payload = json.loads(proc.stdout)
+        context = payload["context"]
         diagnostic = payload["diagnostics"]
         ranked = [entry["path"] for entry in diagnostic["ranked_files"]]
         packed = diagnostic.get("packed_paths", ranked)
         top5 = ranked[:5]
         relevant_at5 = [path for path in top5 if path in expected]
         packed_relevant = [path for path in packed if path in expected]
+        matched_anchors = [anchor for anchor in required_anchors if anchor in context]
+        missing_anchors = [anchor for anchor in required_anchors if anchor not in context]
+        required_anchor_hits += len(matched_anchors)
         expected_path_hits += len(set(relevant_at5))
         packed_expected_path_hits += len(set(packed_relevant))
         rank = next((i + 1 for i, path in enumerate(ranked) if path in expected), None)
@@ -159,6 +184,10 @@ def main():
         if case.get("requireAllExpectedAt5", False) and not expected.issubset(set(top5)):
             missing = sorted(expected.difference(top5))
             failures.append(f"{case['name']}: expected paths missing from top 5: {missing}; ranked={ranked}")
+        if missing_anchors:
+            failures.append(
+                f"{case['name']}: required evidence anchors missing from model-visible context: {missing_anchors}"
+            )
         if diagnostic["returned_bytes"] > case["maxReturnedBytes"]:
             failures.append(
                 f"{case['name']}: returned bytes {diagnostic['returned_bytes']} > {case['maxReturnedBytes']}"
@@ -186,17 +215,29 @@ def main():
             )
 
         returned_tokens = max(diagnostic["estimated_tokens"], 1)
+        canonical_returned_tokens = estimated_tokens(args.binary, context, token_cache)
+        if canonical_returned_tokens != diagnostic["estimated_tokens"]:
+            failures.append(
+                f"{case['name']}: diagnostic token estimate {diagnostic['estimated_tokens']} != canonical estimator {canonical_returned_tokens}"
+            )
         savings = 1.0 - returned_tokens / baseline_tokens
-        top_k_tokens, top_k_paths = top_k_full_files_baseline(sources, ranked)
-        grep_tokens, grep_paths = grep_window_baseline(sources, case["query"])
+        top_k_tokens, top_k_paths = top_k_full_files_baseline(
+            args.binary, sources, ranked, token_cache
+        )
+        grep_tokens, grep_paths = grep_window_baseline(
+            args.binary, sources, case["query"], token_cache
+        )
         top_k_savings = 1.0 - returned_tokens / top_k_tokens
         grep_savings = 1.0 - returned_tokens / grep_tokens
         relevant_per_1k = len(set(packed_relevant)) * 1000.0 / returned_tokens
+        anchors_per_1k = len(matched_anchors) * 1000.0 / returned_tokens
         results.append({
             "name": case["name"],
             "rank": rank,
             "expectedPathsAt5": sorted(set(relevant_at5)),
             "packedExpectedPaths": sorted(set(packed_relevant)),
+            "requiredAnchors": required_anchors,
+            "matchedAnchors": matched_anchors,
             "retrievalFiles": ranked,
             "packedFiles": packed,
             "retrievalUnnecessaryFileRatio": round(retrieval_unnecessary_ratio, 4),
@@ -211,6 +252,7 @@ def main():
             "grepWindowBaselinePaths": grep_paths,
             "tokenSavingsVsGrepWindows": round(grep_savings, 4),
             "relevantPathsPer1kTokens": round(relevant_per_1k, 4),
+            "evidenceAnchorsPer1kTokens": round(anchors_per_1k, 4),
             "elapsedMs": round(elapsed_ms, 2),
         })
 
@@ -220,6 +262,9 @@ def main():
     expected_path_recall = expected_path_hits / expected_path_total if expected_path_total else 0.0
     packed_expected_path_recall = (
         packed_expected_path_hits / expected_path_total if expected_path_total else 0.0
+    )
+    required_anchor_recall = (
+        required_anchor_hits / required_anchor_total if required_anchor_total else 1.0
     )
     avg_tokens = statistics.fmean(r["estimatedTokens"] for r in results) if results else 0.0
     avg_retrieval_unnecessary = (
@@ -238,8 +283,13 @@ def main():
     avg_relevant_per_1k = (
         statistics.fmean(r["relevantPathsPer1kTokens"] for r in results) if results else 0.0
     )
+    avg_anchors_per_1k = (
+        statistics.fmean(r["evidenceAnchorsPer1kTokens"] for r in results) if results else 0.0
+    )
     latencies = [r["elapsedMs"] for r in results]
+    tokens = [r["estimatedTokens"] for r in results]
     p95_latency = percentile(latencies, 0.95)
+    p95_tokens = percentile(tokens, 0.95)
 
     if recall < config["minRecallAt5"]:
         failures.append(f"Recall@5 {recall:.3f} < {config['minRecallAt5']:.3f}")
@@ -254,10 +304,18 @@ def main():
         failures.append(
             f"packed expected-path recall {packed_expected_path_recall:.3f} < {min_packed_recall:.3f}"
         )
+    min_anchor_recall = config.get("minRequiredAnchorRecall")
+    if min_anchor_recall is not None and required_anchor_recall < min_anchor_recall:
+        failures.append(
+            f"required evidence anchor recall {required_anchor_recall:.3f} < {min_anchor_recall:.3f}"
+        )
     if avg_tokens > config["maxAverageEstimatedTokens"]:
         failures.append(
             f"average estimated tokens {avg_tokens:.1f} > {config['maxAverageEstimatedTokens']}"
         )
+    max_p95_tokens = config.get("maxP95EstimatedTokens")
+    if max_p95_tokens is not None and p95_tokens > max_p95_tokens:
+        failures.append(f"p95 estimated tokens {p95_tokens:.1f} > {max_p95_tokens}")
     if avg_packed_unnecessary > config["maxAverageUnnecessaryFileRatio"]:
         failures.append(
             f"average packed unnecessary file ratio {avg_packed_unnecessary:.3f} > {config['maxAverageUnnecessaryFileRatio']:.3f}"
@@ -279,20 +337,29 @@ def main():
         failures.append(
             f"relevant paths / 1k tokens {avg_relevant_per_1k:.3f} < {min_efficiency:.3f}"
         )
+    min_anchor_efficiency = config.get("minEvidenceAnchorsPer1kTokens")
+    if min_anchor_efficiency is not None and avg_anchors_per_1k < min_anchor_efficiency:
+        failures.append(
+            f"evidence anchors / 1k tokens {avg_anchors_per_1k:.3f} < {min_anchor_efficiency:.3f}"
+        )
 
     summary = {
         "baselineRoot": str(baseline_root),
         "baselineSourceFiles": baseline_files,
         "baselineEstimatedTokens": baseline_tokens,
+        "tokenEstimator": "sippion heuristic-v3 via estimate-tokens CLI",
         "recallAt5": round(recall, 4),
         "mrr": round(mrr, 4),
         "expectedPathRecallAt5": round(expected_path_recall, 4),
         "packedExpectedPathRecall": round(packed_expected_path_recall, 4),
+        "requiredEvidenceAnchorRecall": round(required_anchor_recall, 4),
         "averageEstimatedTokens": round(avg_tokens, 2),
+        "p95EstimatedTokens": round(p95_tokens, 2),
         "averageTokenSavingsVsFullSource": round(avg_savings, 4),
         "averageTokenSavingsVsTopKFullFiles": round(avg_top_k_savings, 4),
         "averageTokenSavingsVsGrepWindows": round(avg_grep_savings, 4),
         "averageRelevantPathsPer1kTokens": round(avg_relevant_per_1k, 4),
+        "averageEvidenceAnchorsPer1kTokens": round(avg_anchors_per_1k, 4),
         "averageRetrievalUnnecessaryFileRatio": round(avg_retrieval_unnecessary, 4),
         "averagePackedUnnecessaryFileRatio": round(avg_packed_unnecessary, 4),
         "averageUnnecessaryFileRatio": round(avg_packed_unnecessary, 4),
