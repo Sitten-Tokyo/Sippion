@@ -10,6 +10,33 @@ mod engine;
 
 use engine::RepositoryEngine;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RankedFileDiagnostic {
+    pub path: String,
+    pub rank: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextDiagnostics {
+    pub returned_bytes: usize,
+    pub estimated_tokens: usize,
+    pub hard_budget_bytes: usize,
+    pub target_estimated_tokens: usize,
+    pub scanned_bytes: usize,
+    pub confidence_milli: u16,
+    pub adaptive_rounds: usize,
+    /// Retrieval ranking before model-visible packing. Evaluation must use this for Recall/MRR.
+    pub ranked_files: Vec<RankedFileDiagnostic>,
+    /// Unique paths that actually survived the model-visible context packer.
+    pub packed_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextResult {
+    pub model_text: String,
+    pub diagnostics: ContextDiagnostics,
+}
+
 /// Internal boundary for repository-context retrieval.
 ///
 /// MCP framing remains outside this trait. The engine beneath it owns retrieval, structural
@@ -35,6 +62,17 @@ impl LocalRepositoryService {
         Ok(Self {
             engine: RepositoryEngine::open_with_scan_budget(root_path, scan_budget_bytes)?,
         })
+    }
+
+    pub fn context_result(
+        &self,
+        query: &NormalizedQuery,
+        coordination: Option<&CoordinationContext>,
+        cancellation: Option<&AtomicBool>,
+    ) -> Result<ContextResult, RepositoryServiceError> {
+        self.engine
+            .context_result(query, coordination, cancellation)
+            .map_err(Into::into)
     }
 
     #[cfg(test)]
@@ -139,6 +177,36 @@ mod tests {
         assert!(output.contains("[NO_MATCH_IN_SEARCHABLE_SET:"));
         assert!(output.contains("excluded=1"));
         assert!(output.contains("CTX v=4"));
+
+        drop(service);
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn typed_diagnostics_do_not_depend_on_model_visible_format_parsing() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sippion-service-diagnostic-{nonce}"));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("auth.rs"), "fn validate_session_token() {}\n").expect("auth");
+
+        let repository = RepositoryAccess::open(&root).expect("open repository");
+        let service = LocalRepositoryService::from_repository(repository);
+        let query = McpToolInput {
+            q: "validate_session_token".into(),
+            ..Default::default()
+        }
+        .normalize()
+        .expect("query");
+        let result = service.context_result(&query, None, None).expect("context result");
+        assert_eq!(
+            result.diagnostics.ranked_files.first().map(|entry| entry.path.as_str()),
+            Some("auth.rs")
+        );
+        assert!(result.diagnostics.packed_paths.iter().any(|path| path == "auth.rs"));
+        assert_eq!(result.diagnostics.returned_bytes, result.model_text.len());
 
         drop(service);
         std::fs::remove_dir_all(&root).expect("cleanup");
