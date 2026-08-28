@@ -4,6 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 
+REPOSITORY_URL = 'https://github.com/Sitten-Tokyo/Sippion.git'
+REPOSITORY_ID = '1338733125'
+WEBSITE_URL = 'https://github.com/Sitten-Tokyo/Sippion'
+ICON_URL = 'https://github.com/Sitten-Tokyo.png?size=128'
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--assets-dir', required=True)
 parser.add_argument('--tag', required=True)
@@ -32,7 +37,16 @@ value = {
     'name': 'io.github.Sitten-Tokyo/sippion',
     'title': 'Sippion',
     'description': 'Local read-only repository context retrieval for AI coding agents.',
-    'repository': {'url': 'https://github.com/Sitten-Tokyo/Sippion.git', 'source': 'github'},
+    'repository': {
+        'url': REPOSITORY_URL,
+        'source': 'github',
+        'id': REPOSITORY_ID,
+    },
+    'websiteUrl': WEBSITE_URL,
+    'icons': [{
+        'src': ICON_URL,
+        'mimeType': 'image/png',
+    }],
     'version': args.version,
     'packages': packages,
 }
