@@ -63,10 +63,9 @@ fn declaration_kind(node: &Node<'_>) -> Option<&'static str> {
         "type_alias_declaration" | "type_spec" => Some("type"),
         "enum_declaration" => Some("enum"),
         // Java / C# / C / C++ declarations not covered by the shared names above.
-        "constructor_declaration"
-        | "local_function_statement"
-        | "function_definition"
-        | "function_declarator" => Some("function"),
+        "constructor_declaration" | "local_function_statement" | "function_declarator" => {
+            Some("function")
+        }
         "struct_declaration" | "struct_specifier" => Some("struct"),
         "class_specifier" | "record_declaration" => Some("class"),
         "union_specifier" => Some("union"),
