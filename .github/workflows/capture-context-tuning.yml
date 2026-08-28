@@ -1,0 +1,55 @@
+name: Capture offline context tuning
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  tune:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          toolchain: 1.85.0
+      - name: Build independent train and holdout roots
+        run: |
+          set -euo pipefail
+          train_root="$RUNNER_TEMP/sippion-tune-train"
+          holdout_root="$RUNNER_TEMP/sippion-tune-holdout"
+          rm -rf "$train_root" "$holdout_root"
+          mkdir -p "$train_root" "$holdout_root"
+          cp -R src "$train_root/src"
+          tar --exclude='./.git' --exclude='./target' --exclude='./eval' --exclude='./node_modules' -cf - . | tar -xf - -C "$holdout_root"
+          echo "TRAIN_ROOT=$train_root" >> "$GITHUB_ENV"
+          echo "HOLDOUT_ROOT=$holdout_root" >> "$GITHUB_ENV"
+      - name: Run train-selected tuner and capture post-selection holdout
+        run: |
+          set -euo pipefail
+          python3 scripts/tune-context.py \
+            --repo . \
+            --train-cases eval/self_train_cases.json \
+            --train-fixture "$TRAIN_ROOT" \
+            --train-baseline-root "$TRAIN_ROOT" \
+            --holdout-cases eval/self_holdout_cases.json \
+            --holdout-fixture "$HOLDOUT_ROOT" \
+            --holdout-baseline-root "$HOLDOUT_ROOT" \
+            > .github/context-tuning-result.json
+          python3 -m json.tool .github/context-tuning-result.json >/dev/null
+      - name: Commit result and remove temporary workflow
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm -f .github/workflows/capture-context-tuning.yml
+          git add .github/context-tuning-result.json
+          git commit -m "Capture offline context tuning result"
+          git push origin HEAD:feature/context-efficiency-overhaul
