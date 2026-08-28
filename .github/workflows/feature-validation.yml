@@ -1,0 +1,44 @@
+name: Feature validation
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: clippy
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run fixture retrieval quality and context budget evaluation
+        run: python3 scripts/retrieval-eval.py --binary target/release/sippion
+
+      - name: Run self-hosted token efficiency evaluation
+        run: |
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_cases.json \
+            --fixture . \
+            --baseline-root .
