@@ -37,4 +37,9 @@ text = text.replace(
 )
 hybrid.write_text(text, encoding="utf-8")
 
+ci = root / ".github/workflows/ci.yml"
+text = ci.read_text(encoding="utf-8")
+text = text.replace("cargo-deny --version 0.20.2", "cargo-deny --version 0.18.3")
+ci.write_text(text, encoding="utf-8")
+
 print("temporary patch fixups applied")
