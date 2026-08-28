@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use unicode_casefold::UnicodeCaseFold;
-use unicode_normalization::char::decompose_compatible;
+use unicode_normalization::char::{decompose_compatible, is_combining_mark};
 
 pub const PRODUCT_NAME: &str = "Sippion";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -39,6 +39,25 @@ pub(crate) fn unicode_search_fold(text: &str) -> String {
         fold_search_scalar(ch, |folded_ch| folded.push(folded_ch));
     }
     folded
+}
+
+fn is_search_token_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || ch == '-' || is_combining_mark(ch)
+}
+
+/// Splits text that has already gone through `unicode_search_fold`. Combining marks remain part of
+/// the preceding identifier token, and the minimum length is expressed in alphanumeric Unicode
+/// scalars rather than UTF-8 bytes.
+pub(crate) fn split_search_tokens(folded_text: &str) -> impl Iterator<Item = &str> {
+    folded_text
+        .split(|ch: char| !is_search_token_char(ch))
+        .filter(|part| {
+            part.chars()
+                .filter(|ch| ch.is_alphanumeric())
+                .take(2)
+                .count()
+                >= 2
+        })
 }
 
 /// Finds a folded search term while returning the byte offset in the original UTF-8 text. Full
@@ -107,14 +126,10 @@ impl McpToolInput {
             return Err(InputError::QueryTooLong);
         }
 
+        let raw_lower = unicode_search_fold(&self.q);
         let mut terms = Vec::new();
-        for part in self
-            .q
-            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
-            .filter(|part| part.len() >= 2)
-            .map(unicode_search_fold)
-            .filter(|part| !QUERY_STOPWORDS.contains(&part.as_str()))
-        {
+        for part in split_search_tokens(&raw_lower).filter(|part| !QUERY_STOPWORDS.contains(part)) {
+            let part = part.to_string();
             if !terms.contains(&part) {
                 terms.push(part);
                 if terms.len() > MAX_QUERY_TERMS {
@@ -126,10 +141,7 @@ impl McpToolInput {
             return Err(InputError::TooFewTerms);
         }
 
-        Ok(NormalizedQuery {
-            raw_lower: unicode_search_fold(&self.q),
-            terms,
-        })
+        Ok(NormalizedQuery { raw_lower, terms })
     }
 
     pub fn coordination(&self) -> Result<CoordinationContext, InputError> {
@@ -661,6 +673,64 @@ mod tests {
             let text = format!("prefix|{sample}|suffix");
             let offset = unicode_search_fold_find_byte(&text, &folded).expect("folded match");
             assert_eq!(offset, "prefix|".len(), "sample={sample:?}");
+        }
+    }
+    #[test]
+    fn query_tokenization_treats_composed_and_decomposed_forms_equally() {
+        let composed = McpToolInput {
+            q: "CAFÉAuth token".into(),
+            ..Default::default()
+        }
+        .normalize()
+        .expect("composed query");
+        let decomposed = McpToolInput {
+            q: "Cafe\u{301}Auth token".into(),
+            ..Default::default()
+        }
+        .normalize()
+        .expect("decomposed query");
+        assert_eq!(composed.raw_lower, decomposed.raw_lower);
+        assert_eq!(composed.terms, decomposed.terms);
+    }
+
+    #[test]
+    fn token_minimum_length_counts_unicode_letters_not_utf8_bytes() {
+        assert_eq!(
+            McpToolInput {
+                q: "é".into(),
+                ..Default::default()
+            }
+            .normalize(),
+            Err(InputError::TooFewTerms)
+        );
+        assert!(
+            McpToolInput {
+                q: "認証".into(),
+                ..Default::default()
+            }
+            .normalize()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn deterministic_tokenization_property_corpus_keeps_canonical_equivalence() {
+        for index in 0..256u16 {
+            let composed = format!("prefix{index}-CAFÉAuth suffix{index}");
+            let decomposed = format!("prefix{index}-Cafe\u{301}Auth suffix{index}");
+            let a = McpToolInput {
+                q: composed,
+                ..Default::default()
+            }
+            .normalize()
+            .expect("composed corpus query");
+            let b = McpToolInput {
+                q: decomposed,
+                ..Default::default()
+            }
+            .normalize()
+            .expect("decomposed corpus query");
+            assert_eq!(a.terms, b.terms, "corpus case {index}");
         }
     }
 }

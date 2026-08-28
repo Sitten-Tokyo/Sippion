@@ -1861,3 +1861,65 @@ fn unicode_substring_grams_preserve_sequence_order() {
     assert_ne!(forward, reordered);
     assert!(!forward.is_empty());
 }
+
+#[test]
+fn generated_sensitive_literal_corpus_never_leaks() {
+    let keys = [
+        "password",
+        "passwd",
+        "secret_key",
+        "secret_key_base",
+        "signing_key",
+        "encryption_key",
+    ];
+    for index in 0..512usize {
+        let key = keys[index % keys.len()];
+        let secret = format!("generated-secret-{index:04}-Zx9Q");
+        let line = match index % 3 {
+            0 => format!("{key} = \"{secret}\""),
+            1 => format!("{key}: '{secret}'"),
+            _ => format!("\"{key}\": \"{secret}\","),
+        };
+        let redacted = redact_high_confidence_secrets(&line);
+        assert!(
+            !redacted.contains(&secret),
+            "secret leaked for generated case {index}: {redacted}"
+        );
+        assert!(redacted.contains("SIPPION_REDACTED"));
+    }
+}
+
+#[test]
+fn generated_ascii_case_variants_of_sensitive_paths_stay_denied() {
+    let sensitive = [
+        ".ssh/id_rsa",
+        ".env.production",
+        ".cargo/credentials.toml",
+        ".terraformrc",
+        ".vault-token",
+        "auth.json",
+    ];
+    let mut state = 0x5eed_u64;
+    for round in 0..128usize {
+        for path in sensitive {
+            let variant = path
+                .bytes()
+                .map(|byte| {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    if byte.is_ascii_alphabetic() && (state >> 63) != 0 {
+                        byte.to_ascii_uppercase()
+                    } else {
+                        byte
+                    }
+                })
+                .map(char::from)
+                .collect::<String>();
+            assert!(
+                is_denied(Path::new(&variant)),
+                "generated path variant escaped policy in round {round}: {variant}"
+            );
+        }
+    }
+}
