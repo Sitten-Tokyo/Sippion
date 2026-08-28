@@ -308,6 +308,12 @@ fn query_diagnostic(context: &str) -> QueryDiagnostic {
             }
         }
     }
+    ranked_files.sort_by(|left, right| {
+        right
+            .rank
+            .partial_cmp(&left.rank)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     QueryDiagnostic {
         returned_bytes: context.len(),
         estimated_tokens: heuristic_v3_estimated_tokens(context),
