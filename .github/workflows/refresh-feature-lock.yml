@@ -1,0 +1,41 @@
+name: Refresh feature lockfile
+
+on:
+  push:
+    branches:
+      - feature/language-sbom-oss
+    paths:
+      - Cargo.toml
+      - .github/workflows/refresh-feature-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feature/language-sbom-oss
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
+
+      - name: Resolve and compile dependencies
+        run: cargo check
+
+      - name: Commit refreshed lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Refresh Cargo.lock for grammar support"
+          git push origin HEAD:feature/language-sbom-oss
