@@ -9,6 +9,9 @@ on:
       - scripts/bootstrap.ps1
       - scripts/install.sh
       - scripts/install.ps1
+      - scripts/prepare-mcpb.py
+      - scripts/generate-server-json.py
+      - .github/workflows/mcp-registry-publish.yml
       - .github/workflows/release-build.yml
       - .github/workflows/release-draft.yml
       - .github/workflows/release-supply-chain-smoke.yml
@@ -56,6 +59,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Set up pinned Node.js for MCPB tooling
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.19.0'
+
       - name: Generate and validate CycloneDX SBOM
         shell: bash
         run: |
@@ -87,6 +95,42 @@ jobs:
             test -s "downloaded/$artifact/SHA256SUMS"
             (cd "downloaded/$artifact" && sha256sum -c "$artifact.sha256")
           done
+
+      - name: Build and validate MCPB plus registry metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          tag="v$version"
+          mkdir -p mcpb-work registry-smoke
+          python3 scripts/prepare-mcpb.py --binary downloaded/sippion-linux-x86_64/sippion-linux-x86_64 --platform linux --version "$version" --output-dir mcpb-work/linux
+          python3 scripts/prepare-mcpb.py --binary downloaded/sippion-windows-x86_64.exe/sippion-windows-x86_64.exe --platform win32 --version "$version" --output-dir mcpb-work/windows
+          python3 scripts/prepare-mcpb.py --binary downloaded/sippion-macos-aarch64/sippion-macos-aarch64 --platform darwin --version "$version" --output-dir mcpb-work/macos-aarch64
+          python3 scripts/prepare-mcpb.py --binary downloaded/sippion-macos-x86_64/sippion-macos-x86_64 --platform darwin --version "$version" --output-dir mcpb-work/macos-x86_64
+          for spec in \
+            'linux:sippion-linux-x86_64.mcpb' \
+            'windows:sippion-windows-x86_64.mcpb' \
+            'macos-aarch64:sippion-macos-aarch64.mcpb' \
+            'macos-x86_64:sippion-macos-x86_64.mcpb'; do
+            dir=${spec%%:*}
+            file=${spec#*:}
+            npx --yes @anthropic-ai/mcpb@2.1.2 validate "mcpb-work/$dir"
+            npx --yes @anthropic-ai/mcpb@2.1.2 pack "mcpb-work/$dir" "registry-smoke/$file"
+            test -s "registry-smoke/$file"
+          done
+          python3 scripts/generate-server-json.py --assets-dir registry-smoke --tag "$tag" --version "$version" --output registry-smoke/server.json
+          curl --fail --location --silent --show-error \
+            --output /tmp/mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  /tmp/mcp-publisher.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
+          /tmp/mcp-publisher validate registry-smoke/server.json
+          for bundle in registry-smoke/*.mcpb; do
+            sha256sum "$bundle" > "$bundle.sha256"
+            sha256sum -c "$bundle.sha256"
+          done
+          sha256sum registry-smoke/server.json > registry-smoke/server.json.sha256
+          sha256sum -c registry-smoke/server.json.sha256
 
       - name: Stage installer assets and checksums
         shell: bash
@@ -200,7 +244,20 @@ jobs:
             sippion-macos-x86_64.sha256
           )
           if [ "$EVENT_NAME" = "release" ] || [ "$EVENT_NAME" = "workflow_run" ]; then
-            expected+=(sippion.cdx.json sippion.cdx.json.sha256)
+            expected+=(
+              sippion.cdx.json
+              sippion.cdx.json.sha256
+              server.json
+              server.json.sha256
+              sippion-linux-x86_64.mcpb
+              sippion-linux-x86_64.mcpb.sha256
+              sippion-windows-x86_64.mcpb
+              sippion-windows-x86_64.mcpb.sha256
+              sippion-macos-aarch64.mcpb
+              sippion-macos-aarch64.mcpb.sha256
+              sippion-macos-x86_64.mcpb
+              sippion-macos-x86_64.mcpb.sha256
+            )
           fi
           for asset in "${expected[@]}"; do
             test -s "published/$asset" || { echo "Missing release asset: $asset" >&2; exit 2; }
@@ -224,6 +281,13 @@ jobs:
           if [ -f sippion.cdx.json.sha256 ]; then
             sha256sum -c sippion.cdx.json.sha256
           fi
+          if [ -f server.json.sha256 ]; then
+            sha256sum -c server.json.sha256
+          fi
+          for sidecar in *.mcpb.sha256; do
+            [ -e "$sidecar" ] || continue
+            sha256sum -c "$sidecar"
+          done
 
       - name: Verify every published provenance attestation
         env:
@@ -238,10 +302,18 @@ jobs:
               --source-digest "$RELEASE_SHA" >/dev/null
           done
           if [ -f published/sippion.cdx.json ]; then
-            gh attestation verify "published/sippion.cdx.json" \
-              --repo "$REPOSITORY" \
-              --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
-              --source-digest "$RELEASE_SHA" >/dev/null
+            for asset in \
+              sippion.cdx.json \
+              server.json \
+              sippion-linux-x86_64.mcpb \
+              sippion-windows-x86_64.mcpb \
+              sippion-macos-aarch64.mcpb \
+              sippion-macos-x86_64.mcpb; do
+              gh attestation verify "published/$asset" \
+                --repo "$REPOSITORY" \
+                --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+                --source-digest "$RELEASE_SHA" >/dev/null
+            done
           fi
           for binary in \
             sippion-linux-x86_64 \
