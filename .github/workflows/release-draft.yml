@@ -19,7 +19,7 @@ jobs:
     name: Validate and resolve release target
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     outputs:
       tag: ${{ steps.prepare.outputs.tag }}
       sha: ${{ steps.prepare.outputs.sha }}
@@ -30,7 +30,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Validate and resolve release target
+      - name: Validate release candidate without materializing a tag
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,15 +45,12 @@ jobs:
 
           resolve_tag() {
             local release_tag=$1
-            local ref_endpoint="repos/$REPOSITORY/git/ref/tags/$release_tag"
-            local object_type
-            local object_sha
-            object_type=$(gh api "$ref_endpoint" --jq '.object.type')
-            object_sha=$(gh api "$ref_endpoint" --jq '.object.sha')
+            local object_type object_sha
+            object_type=$(gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" --jq '.object.type')
+            object_sha=$(gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" --jq '.object.sha')
             while [ "$object_type" = "tag" ]; do
-              local tag_endpoint="repos/$REPOSITORY/git/tags/$object_sha"
-              object_type=$(gh api "$tag_endpoint" --jq '.object.type')
-              object_sha=$(gh api "$tag_endpoint" --jq '.object.sha')
+              object_type=$(gh api "repos/$REPOSITORY/git/tags/$object_sha" --jq '.object.type')
+              object_sha=$(gh api "repos/$REPOSITORY/git/tags/$object_sha" --jq '.object.sha')
             done
             if [ "$object_type" != "commit" ] || ! [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Release tag $release_tag does not resolve to a commit SHA." >&2
@@ -76,42 +73,28 @@ jobs:
             exit 2
           fi
 
+          expected_version=${release_tag#v}
+          manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          if [ "$manifest_version" != "$expected_version" ]; then
+            echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+            exit 2
+          fi
+
           if [ "$EVENT_NAME" = "push" ]; then
             main_sha=$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')
             if [ "$CURRENT_SHA" != "$main_sha" ]; then
               echo "Release branch must point exactly at current main ($main_sha), got $CURRENT_SHA." >&2
               exit 2
             fi
-
-            expected_version=${release_tag#v}
-            manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-            if [ "$manifest_version" != "$expected_version" ]; then
-              echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+            if gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" >/dev/null 2>&1; then
+              echo "Release tag $release_tag already exists; branch-triggered releases require a fresh tag." >&2
               exit 2
             fi
-
-            if gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" >/dev/null 2>&1; then
-              resolved_sha=$(resolve_tag "$release_tag")
-              if [ "$resolved_sha" != "$CURRENT_SHA" ]; then
-                echo "Existing tag $release_tag points to $resolved_sha, expected $CURRENT_SHA." >&2
-                exit 2
-              fi
-            else
-              gh api --method POST "repos/$REPOSITORY/git/refs" \
-                -f ref="refs/tags/$release_tag" \
-                -f sha="$CURRENT_SHA" >/dev/null
-              resolved_sha=$(resolve_tag "$release_tag")
-            fi
+            resolved_sha=$CURRENT_SHA
           else
             resolved_sha=$(resolve_tag "$release_tag")
             if [ "$CURRENT_SHA" != "$resolved_sha" ]; then
-              echo "Manual release must be dispatched on the exact tag ref $release_tag ($resolved_sha), got workflow source $CURRENT_SHA." >&2
-              exit 2
-            fi
-            expected_version=${release_tag#v}
-            manifest_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-            if [ "$manifest_version" != "$expected_version" ]; then
-              echo "Cargo.toml version $manifest_version does not match release tag $release_tag." >&2
+              echo "Manual release must be dispatched on exact tag ref $release_tag ($resolved_sha), got $CURRENT_SHA." >&2
               exit 2
             fi
           fi
@@ -140,7 +123,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Check out tagged installer sources
+      - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare-release.outputs.sha }}
@@ -153,7 +136,7 @@ jobs:
           path: downloaded
           merge-multiple: false
 
-      - name: Assemble release assets
+      - name: Assemble and verify release assets
         shell: bash
         run: |
           set -euo pipefail
@@ -174,9 +157,16 @@ jobs:
             sha256sum install.sh > install.sh.sha256
             sha256sum install.ps1 > install.ps1.sha256
             cat install.sh.sha256 install.ps1.sha256 >> SHA256SUMS
+            sha256sum -c SHA256SUMS
           )
-          test -n "$(find release-assets -type f -name 'sippion-*' -print -quit)"
-          test -s release-assets/SHA256SUMS
+          for artifact in \
+            sippion-linux-x86_64 \
+            sippion-windows-x86_64.exe \
+            sippion-macos-aarch64 \
+            sippion-macos-x86_64; do
+            test -s "release-assets/$artifact"
+            test -s "release-assets/$artifact.sha256"
+          done
 
       - name: Attest installer provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -185,18 +175,58 @@ jobs:
             release-assets/install.sh
             release-assets/install.ps1
 
-      - name: Create draft release
+      - name: Materialize tag and create draft release atomically
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare-release.outputs.sha }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+
           if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists." >&2
             exit 2
           fi
+
+          tag_created=0
+          cleanup_failure() {
+            status=$?
+            if [ "$status" -ne 0 ] && [ "$tag_created" -eq 1 ]; then
+              echo "Release creation failed after tag creation; removing partial release/tag." >&2
+              gh release delete "$RELEASE_TAG" --repo "$REPOSITORY" --yes >/dev/null 2>&1 || true
+              gh api --method DELETE "repos/$REPOSITORY/git/refs/tags/$RELEASE_TAG" >/dev/null 2>&1 || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_failure EXIT
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            # Build and attestation can take several minutes. Refuse to publish an older main if a
+            # newer commit landed while artifacts were being produced.
+            current_main=$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+            if [ "$current_main" != "$RELEASE_SHA" ]; then
+              echo "main advanced during release build: expected $RELEASE_SHA, now $current_main." >&2
+              exit 2
+            fi
+            if gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "Tag $RELEASE_TAG appeared during release build." >&2
+              exit 2
+            fi
+            gh api --method POST "repos/$REPOSITORY/git/refs" \
+              -f ref="refs/tags/$RELEASE_TAG" \
+              -f sha="$RELEASE_SHA" >/dev/null
+            tag_created=1
+          else
+            resolved=$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')
+            if [ "$resolved" != "$RELEASE_SHA" ]; then
+              echo "Manual release tag moved: $resolved != $RELEASE_SHA." >&2
+              exit 2
+            fi
+          fi
+
           gh release create "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
             --verify-tag \
@@ -204,6 +234,8 @@ jobs:
             --generate-notes \
             --title "Sippion $RELEASE_TAG" \
             release-assets/*
+
+          trap - EXIT
 
   publish-release:
     name: Publish branch-triggered pre-release

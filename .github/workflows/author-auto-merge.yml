@@ -1,13 +1,14 @@
 name: Merge trusted author after CI
 
-# workflow_run evaluates this workflow from the default branch and never checks out or executes
-# pull-request contents. A trusted-author PR is considered for merge only after the complete CI
-# workflow for its exact head SHA has succeeded, so correctness does not depend on repository
-# branch-protection settings being configured separately.
+# This workflow is evaluated from the default branch and never checks out pull-request contents.
+# A trusted-author PR can merge only after CI and every path-applicable smoke workflow have
+# succeeded for the exact head. The CI artifact records the exact base/head pair that was tested.
 on:
   workflow_run:
     workflows:
       - CI
+      - Bootstrap smoke test
+      - Release supply-chain smoke
     types:
       - completed
 
@@ -16,9 +17,11 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize all trusted-author merges. This prevents two successful workflow_run events from
+# independently validating the same main tip and then racing each other into main.
 concurrency:
-  group: trusted-author-ci-merge-${{ github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
+  group: trusted-author-main-merge
+  cancel-in-progress: false
 
 jobs:
   merge:
@@ -27,16 +30,15 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
-      - name: Resolve and revalidate trusted pull request
+      - name: Resolve exact tested head and validation set
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -49,7 +51,6 @@ jobs:
           prs_json="$(gh api \
             -H 'Accept: application/vnd.github+json' \
             "repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls")"
-
           matching="$(jq -c \
             --arg repository "$REPOSITORY" \
             --arg expected_head_sha "$RUN_HEAD_SHA" '
@@ -71,15 +72,9 @@ jobs:
             echo "Expected exactly one eligible trusted-author PR for $RUN_HEAD_SHA" >&2
             exit 1
           fi
-
           pr_number="$(jq -r '.[0].number' <<<"$matching")"
-          if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
-            echo "Invalid PR number" >&2
-            exit 1
-          fi
+          [[ "$pr_number" =~ ^[0-9]+$ ]] || { echo "Invalid PR number" >&2; exit 1; }
 
-          # Re-read the PR immediately before merge so a stale workflow_run event cannot authorize
-          # a newer head, changed base, draft transition, fork, or different author identity.
           pr_json="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
           jq -e \
             --arg repository "$REPOSITORY" \
@@ -94,34 +89,152 @@ jobs:
               and .head.sha == $expected_head_sha
             ' <<<"$pr_json" >/dev/null
 
-          current_base_sha="$(jq -r '.base.sha' <<<"$pr_json")"
-          if [[ ! "$current_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Invalid current PR base SHA" >&2
-            exit 1
-          fi
-          binding_name="ci-binding-${current_base_sha}-${RUN_HEAD_SHA}"
-          artifacts_json="$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100")"
-          jq -e --arg binding_name "$binding_name" '
-            [ .artifacts[]
-              | select(.name == $binding_name and .expired == false)
-            ]
-            | length == 1
-          ' <<<"$artifacts_json" >/dev/null || {
-            echo "Successful CI was not bound to current base/head pair: $binding_name" >&2
-            exit 1
+          changed_files="$(gh api --paginate \
+            "repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
+            --jq '.[].filename')"
+          require_bootstrap=0
+          require_release=0
+          while IFS= read -r path; do
+            case "$path" in
+              scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|.github/workflows/bootstrap-smoke.yml)
+                require_bootstrap=1
+                ;;
+            esac
+            case "$path" in
+              scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|.github/workflows/release-build.yml|.github/workflows/release-draft.yml|.github/workflows/release-supply-chain-smoke.yml)
+                require_release=1
+                ;;
+            esac
+          done <<<"$changed_files"
+
+          runs_json="$(gh api \
+            "repos/${REPOSITORY}/actions/runs?head_sha=${RUN_HEAD_SHA}&event=pull_request&per_page=100")"
+
+          has_successful_workflow() {
+            local workflow_path=$1
+            jq -e \
+              --arg path "$workflow_path" \
+              --arg head "$RUN_HEAD_SHA" '
+                [ .workflow_runs[]
+                  | select(
+                      .path == $path
+                      and .head_sha == $head
+                      and .event == "pull_request"
+                      and .status == "completed"
+                      and .conclusion == "success"
+                    )
+                ] | length > 0
+              ' <<<"$runs_json" >/dev/null
           }
 
-          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+          if [[ "$require_bootstrap" -eq 1 ]] && ! has_successful_workflow '.github/workflows/bootstrap-smoke.yml'; then
+            echo "Bootstrap smoke has not succeeded for $RUN_HEAD_SHA yet."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$require_release" -eq 1 ]] && ! has_successful_workflow '.github/workflows/release-supply-chain-smoke.yml'; then
+            echo "Release supply-chain smoke has not succeeded for $RUN_HEAD_SHA yet."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Squash merge exact CI-verified head
+          tested_base_sha=''
+          mapfile -t ci_run_ids < <(jq -r \
+            --arg head "$RUN_HEAD_SHA" '
+              [ .workflow_runs[]
+                | select(
+                    .path == ".github/workflows/ci.yml"
+                    and .head_sha == $head
+                    and .event == "pull_request"
+                    and .status == "completed"
+                    and .conclusion == "success"
+                  )
+              ]
+              | sort_by(.created_at) | reverse | .[].id
+            ' <<<"$runs_json")
+
+          for ci_run_id in "${ci_run_ids[@]}"; do
+            for retry in 1 2 3; do
+              artifacts_json="$(gh api \
+                "repos/${REPOSITORY}/actions/runs/${ci_run_id}/artifacts?per_page=100")"
+              mapfile -t bindings < <(jq -r \
+                --arg head "$RUN_HEAD_SHA" '
+                  .artifacts[]
+                  | select(
+                      .expired == false
+                      and (.name | test("^ci-binding-[0-9a-f]{40}-" + $head + "$"))
+                    )
+                  | .name
+                ' <<<"$artifacts_json")
+              if [[ "${#bindings[@]}" -eq 1 ]]; then
+                binding_name="${bindings[0]}"
+                tested_base_sha="${binding_name#ci-binding-}"
+                tested_base_sha="${tested_base_sha%-${RUN_HEAD_SHA}}"
+                break 2
+              fi
+              sleep 2
+            done
+          done
+
+          if [[ ! "$tested_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "No successful CI run carries one exact base/head binding for $RUN_HEAD_SHA yet."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "tested_base_sha=$tested_base_sha" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Rebase validation onto current main or merge exact head
+        if: steps.pr.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }} # exact merge head
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          TESTED_BASE_SHA: ${{ steps.pr.outputs.tested_base_sha }}
         shell: bash
         run: |
           set -euo pipefail
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg repository "$REPOSITORY" \
+            --arg head "$RUN_HEAD_SHA" '
+              .state == "open"
+              and .draft == false
+              and .base.ref == "main"
+              and .user.login == "Sitten-Tokyo"
+              and .user.type == "User"
+              and .head.repo.full_name == $repository
+              and .head.repo.fork == false
+              and .head.sha == $head
+            ' <<<"$pr_json" >/dev/null
+
+          main_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid main SHA" >&2; exit 1; }
+
+          if [[ "$main_sha" != "$TESTED_BASE_SHA" ]]; then
+            echo "main advanced from tested base $TESTED_BASE_SHA to $main_sha; updating PR branch and requiring fresh CI."
+            gh api --method PUT \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/update-branch" \
+              -f expected_head_sha="$RUN_HEAD_SHA" >/dev/null
+            exit 0
+          fi
+
+          # One final base read immediately before the exact-head merge. Repository-wide workflow
+          # concurrency serializes automated main merges; branch protection remains an independent
+          # second line of defense against direct pushes.
+          final_main_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$final_main_sha" != "$TESTED_BASE_SHA" ]]; then
+            echo "main changed during merge validation; updating PR branch instead of merging."
+            gh api --method PUT \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/update-branch" \
+              -f expected_head_sha="$RUN_HEAD_SHA" >/dev/null
+            exit 0
+          fi
+
           gh pr merge "$PR_NUMBER" \
             --repo "$REPOSITORY" \
             --squash \

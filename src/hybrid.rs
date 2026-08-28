@@ -7,14 +7,11 @@ pub const BM25_B: f64 = 0.75;
 pub fn term_statistics(text: &str, terms: &[String]) -> (usize, Vec<usize>) {
     let mut frequencies = vec![0usize; terms.len()];
     let mut document_len = 0usize;
-    for part in text
-        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
-        .filter(|part| part.len() >= 2)
-    {
+    let folded_text = crate::core::unicode_search_fold(text);
+    for part in crate::core::split_search_tokens(&folded_text) {
         document_len = document_len.saturating_add(1);
-        let folded = crate::core::unicode_search_fold(part);
         for (index, term) in terms.iter().enumerate() {
-            if folded == *term {
+            if part == term {
                 frequencies[index] = frequencies[index].saturating_add(1);
             }
         }
@@ -22,9 +19,8 @@ pub fn term_statistics(text: &str, terms: &[String]) -> (usize, Vec<usize>) {
 
     // Code identifiers are often compounds (validate_token, AuthTokenValidator). Preserve the
     // old substring-recall behaviour as a one-hit fallback while BM25 rewards exact token repeats.
-    let lower = crate::core::unicode_search_fold(text);
     for (index, term) in terms.iter().enumerate() {
-        if frequencies[index] == 0 && lower.contains(term.as_str()) {
+        if frequencies[index] == 0 && folded_text.contains(term.as_str()) {
             frequencies[index] = 1;
         }
     }
@@ -292,5 +288,14 @@ mod tests {
         let lexical_rank = weighted_pagerank(&lexical_only, 20);
         let call_rank = weighted_pagerank(&call_only, 20);
         assert!(call_rank[1] > lexical_rank[1]);
+    }
+    #[test]
+    fn term_statistics_treats_composed_and_decomposed_tokens_equally() {
+        let term = crate::core::unicode_search_fold("CAFÉAuth");
+        let terms = vec![term];
+        let (_, composed) = term_statistics("fn CAFÉAuth() {}", &terms);
+        let (_, decomposed) = term_statistics("fn Cafe\u{301}Auth() {}", &terms);
+        assert_eq!(composed, vec![1]);
+        assert_eq!(composed, decomposed);
     }
 }
