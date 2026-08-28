@@ -43,18 +43,21 @@ jobs:
               text = read(path)
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f"{path}: expected one match for {old[:50]!r}, found {count}")
+                  raise SystemExit(f"{path}: expected one match for {old[:60]!r}, found {count}")
               write(path, text.replace(old, new, 1))
 
-          def replace_between(path, start, end, replacement):
+          def replace_between(path, start, end, replacement, keep_end=True):
               text = read(path)
               start_i = text.find(start)
-              end_i = text.find(end, start_i + len(start)) if start_i >= 0 else -1
-              if start_i < 0 or end_i < 0:
-                  raise SystemExit(f"{path}: marker replacement failed: {start!r} -> {end!r}")
-              write(path, text[:start_i] + replacement + text[end_i:])
+              if start_i < 0:
+                  raise SystemExit(f"{path}: start marker missing: {start!r}")
+              end_i = text.find(end, start_i + len(start))
+              if end_i < 0:
+                  raise SystemExit(f"{path}: end marker missing: {end!r}")
+              tail = text[end_i:] if keep_end else text[end_i + len(end):]
+              write(path, text[:start_i] + replacement + tail)
 
-          # Typed CLI diagnostics: retrieval ranking and packed paths come from the engine directly.
+          # src/main.rs: diagnostics come directly from ContextResult, never from parsing model text.
           replace_once(
               "src/main.rs",
               "use crate::core::{\n    MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES,\n    heuristic_v3_estimated_tokens,\n};",
@@ -87,14 +90,17 @@ jobs:
           """,
           )
 
-          # Deterministic semantic/import expansion.
+          # src/repo/map.rs: deterministic module/stem ambiguity resolution.
           helpers = r'''
           fn expansion_directory_distance(seed_path: &str, candidate_path: &str) -> usize {
               let seed = seed_path.replace('\\', "/");
               let candidate = candidate_path.replace('\\', "/");
               let seed_dir = seed.rsplit_once('/').map_or("", |(dir, _)| dir);
               let candidate_dir = candidate.rsplit_once('/').map_or("", |(dir, _)| dir);
-              let seed_parts = seed_dir.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
+              let seed_parts = seed_dir
+                  .split('/')
+                  .filter(|part| !part.is_empty())
+                  .collect::<Vec<_>>();
               let candidate_parts = candidate_dir
                   .split('/')
                   .filter(|part| !part.is_empty())
@@ -134,7 +140,12 @@ jobs:
           ) -> Vec<(String, f64)> {
               let mut ranked = paths
                   .iter()
-                  .map(|path| (path.clone(), expansion_path_score(seed_path, path, base, exact_module)))
+                  .map(|path| {
+                      (
+                          path.clone(),
+                          expansion_path_score(seed_path, path, base, exact_module),
+                      )
+                  })
                   .collect::<Vec<_>>();
               ranked.sort_by(|(left_path, left_score), (right_path, right_score)| {
                   right_score
@@ -148,30 +159,8 @@ jobs:
 
           '''
           replace_once("src/repo/map.rs", "fn ranked_symbols(\n", helpers + "fn ranked_symbols(\n")
-          replace_once(
-              "src/repo/map.rs",
-              """        let mut by_stem = HashMap::<String, Vec<String>>::new();
-                  let mut by_module = HashMap::<String, String>::new();
-                  for path in index.files.keys() {
-                      if existing.contains(path.as_str()) {
-                          continue;
-                      }
-                      let module = normalized_path_module(path);
-                      if !module.is_empty() {
-                          by_module
-                              .entry(module.clone())
-                              .or_insert_with(|| path.clone());
-                      }
-                      if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
-                          let stem = crate::core::unicode_search_fold(stem);
-                          if stem.len() >= 2 {
-                              by_stem.entry(stem).or_default().push(path.clone());
-                          }
-                      }
-                  }
-                  drop(index);
-          """,
-              """        let mut by_stem = HashMap::<String, Vec<String>>::new();
+
+          deterministic_block = '''        let mut by_stem = HashMap::<String, Vec<String>>::new();
                   let mut by_module = HashMap::<String, Vec<String>>::new();
                   for path in index.files.keys() {
                       if existing.contains(path.as_str()) {
@@ -197,50 +186,56 @@ jobs:
                       paths.sort();
                       paths.dedup();
                   }
-          """,
-          )
-          replace_once(
-              "src/repo/map.rs",
-              """                if let Some(path) = by_module.get(&module) {
-                          scores
-                              .entry(path.clone())
-                              .and_modify(|score| *score = score.max(seed.search_score * 0.08 + 9.0))
-                              .or_insert(seed.search_score * 0.08 + 9.0);
-                      }
-          """,
-              """                if let Some(paths) = by_module.get(&module) {
-                          let base = seed.search_score * 0.08 + 9.0;
-                          for (path, candidate_score) in
-                              ranked_expansion_paths(&seed.relative_path, paths, base, true, 4)
-                          {
-                              scores
-                                  .entry(path)
-                                  .and_modify(|score| *score = score.max(candidate_score))
-                                  .or_insert(candidate_score);
+
+                  let mut scores = HashMap::<String, f64>::new();
+                  for seed in seeds {
+                      for import in seed
+                          .semantics
+                          .import_paths
+                          .iter()
+                          .take(MAX_EXPANSION_IMPORTS_PER_SEED)
+                      {
+                          let module = normalized_module_name(import);
+                          if module.is_empty() {
+                              continue;
+                          }
+                          if let Some(paths) = by_module.get(&module) {
+                              let base = seed.search_score * 0.08 + 9.0;
+                              for (path, candidate_score) in
+                                  ranked_expansion_paths(&seed.relative_path, paths, base, true, 4)
+                              {
+                                  scores
+                                      .entry(path)
+                                      .and_modify(|score| *score = score.max(candidate_score))
+                                      .or_insert(candidate_score);
+                              }
+                          }
+                          let segments = module
+                              .split('/')
+                              .filter(|part| part.len() >= 2)
+                              .collect::<Vec<_>>();
+                          for (distance, segment) in segments.iter().rev().take(3).enumerate() {
+                              let Some(paths) = by_stem.get(*segment) else {
+                                  continue;
+                              };
+                              let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
+                              for (path, candidate_score) in
+                                  ranked_expansion_paths(&seed.relative_path, paths, base, false, 4)
+                              {
+                                  scores
+                                      .entry(path)
+                                      .and_modify(|score| *score = score.max(candidate_score))
+                                      .or_insert(candidate_score);
+                              }
                           }
                       }
-          """,
-          )
-          replace_once(
+                  }
+          '''
+          replace_between(
               "src/repo/map.rs",
-              """                    let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
-                          for path in paths.iter().take(4) {
-                              scores
-                                  .entry(path.clone())
-                                  .and_modify(|score| *score = score.max(base))
-                                  .or_insert(base);
-                          }
-          """,
-              """                    let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
-                          for (path, candidate_score) in
-                              ranked_expansion_paths(&seed.relative_path, paths, base, false, 4)
-                          {
-                              scores
-                                  .entry(path)
-                                  .and_modify(|score| *score = score.max(candidate_score))
-                                  .or_insert(candidate_score);
-                          }
-          """,
+              "        let mut by_stem = HashMap::<String, Vec<String>>::new();\n",
+              "        let mut ranked = scores.into_iter().collect::<Vec<_>>();\n",
+              deterministic_block,
           )
           replace_once(
               "src/repo/map.rs",
@@ -267,20 +262,18 @@ jobs:
               fn import_neighbor_can_enter_structure_without_lexical_query_match() {""",
           )
 
-          # Documentation and evaluation contracts.
+          # README and architecture: state the token-reduction objective and updated pipeline.
           replace_once(
               "README.md",
               """Sippion is a local, read-only MCP server that helps AI coding agents find the
           right parts of a repository before they start opening source files broadly.
-
-          Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,""",
+          """,
               """Sippion is a local, read-only MCP server that helps AI coding agents find the
           right parts of a repository before they start opening source files broadly. Its primary
           job is to organize and bound repository context **before it is passed to an AI model**, so
           clients avoid spending model-input tokens on irrelevant source while preserving the
           evidence needed to solve the task.
-
-          Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,""",
+          """,
           )
           replace_once(
               "README.md",
@@ -305,14 +298,12 @@ jobs:
               "README.ja.md",
               """Sippion は、AIコーディングエージェントがリポジトリ全体を闇雲に読む前に、
           **必要そうな箇所を絞り込むためのローカル・読み取り専用MCPサーバー**です。
-
-          公開するツールは `repo_context` の1つだけです。字句検索、構造情報、""",
+          """,
               """Sippion は、AIコーディングエージェントがリポジトリ全体を闇雲に読む前に、
           **必要そうな箇所を絞り込むためのローカル・読み取り専用MCPサーバー**です。主目的は、
           **AIへ渡す前のリポジトリコンテキストを整理・上限化し、不要なモデル入力トークンの消費を減らすこと**です。
           必要な根拠を落とさず、関係の薄いソースをモデルへ大量投入しないことを最適化目標にしています。
-
-          公開するツールは `repo_context` の1つだけです。字句検索、構造情報、""",
+          """,
           )
           replace_once(
               "README.ja.md",
@@ -332,22 +323,22 @@ jobs:
           )
           replace_once(
               "CHANGELOG.md",
-              "### Changed\n\n- Release-sensitive pull requests now keep",
+              "### Changed\n\n",
               """### Changed
 
           - Repository context packing now explicitly optimizes utility per estimated model-input token, discounts redundant same-file atoms, and exposes typed retrieval/packing diagnostics without reparsing model-visible text.
           - Adaptive retrieval confidence now uses exact evidence plus RAM-index document-frequency rarity instead of treating shorter queries as inherently more specific.
           - Semantic/import expansion now resolves ambiguous same-stem candidates deterministically using module match, directory proximity, language/extension affinity, and path tie-breaking.
           - Retrieval evaluation now separates search ranking from packed model-visible paths and compares token cost against full-source, top-ranked-full-file, and deterministic grep-window baselines.
-          - Release-sensitive pull requests now keep""",
+          """,
           )
           replace_once(
               "CHANGELOG.md",
-              "### Documentation\n\n- Document the Official MCP Registry name",
+              "### Documentation\n\n",
               """### Documentation
 
           - State explicitly that Sippion organizes and bounds repository context before it is passed to AI models in order to reduce unnecessary model-input token consumption.
-          - Document the Official MCP Registry name""",
+          """,
           )
           replace_once(
               "docs/architecture.md",
