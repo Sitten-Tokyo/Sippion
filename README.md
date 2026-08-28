@@ -66,6 +66,29 @@ A checksum-only direct installer mode remains available as an explicit opt-out
 for controlled environments where provenance was verified by another trusted
 mechanism. See [Security and trust boundary](docs/security.md).
 
+## Official MCP Registry
+
+Sippion is published in the Official MCP Registry as
+`io.github.Sitten-Tokyo/sippion`. The canonical Registry record can be inspected
+through the stable API at
+[the latest Sippion Registry entry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.Sitten-Tokyo%2Fsippion/versions/latest).
+
+Each release intended for Registry distribution contains four checksummed,
+provenance-attested MCPB bundles alongside the native binaries:
+
+```text
+sippion-linux-x86_64.mcpb
+sippion-windows-x86_64.mcpb
+sippion-macos-aarch64.mcpb
+sippion-macos-x86_64.mcpb
+```
+
+The MCPB manifest asks the host for an explicit project root and launches the
+same local stdio server. The bootstrap + `sippion setup` path above remains the
+recommended route when you want Sippion to configure Codex, Claude Code, and
+Antigravity automatically; Registry/MCPB distribution is an additional
+standards-based installation and discovery channel.
+
 ## What Sippion does
 
 A client can ask Sippion for focused repository context such as:
