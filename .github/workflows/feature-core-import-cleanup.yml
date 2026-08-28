@@ -1,0 +1,52 @@
+name: Feature core import cleanup
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          persist-credentials: true
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt
+
+      - name: Make Ordering import test-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/core.rs")
+          text = path.read_text(encoding="utf-8")
+          old = "use std::cmp::Ordering;"
+          new = "#[cfg(test)]\nuse std::cmp::Ordering;"
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("Ordering import anchor not found")
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt
+          if git diff --quiet; then
+            echo "Already clean."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/core.rs
+          git commit -m "Make legacy render ordering import test-only"
+          git push origin HEAD:feature/context-efficiency-overhaul
