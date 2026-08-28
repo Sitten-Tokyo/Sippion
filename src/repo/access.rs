@@ -6,6 +6,9 @@ fn ignore_control_has_effective_rule(path: &Path) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return false;
     };
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
     if !metadata.file_type().is_file() || metadata.len() == 0 {
         return false;
     }
@@ -179,7 +182,10 @@ impl RepositoryAccess {
                 .into_iter()
                 .any(|name| ignore_control_has_effective_rule(&directory.join(name)))
         };
-        let root_ignore_sentinel = if has_effective_ignore_control(&root_path) {
+        let git_info_exclude = root_path.join(".git").join("info").join("exclude");
+        let root_ignore_sentinel = if has_effective_ignore_control(&root_path)
+            || ignore_control_has_effective_rule(&git_info_exclude)
+        {
             1
         } else {
             0

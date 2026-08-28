@@ -1,6 +1,6 @@
 [package]
 name = "sippion"
-version = "0.1.0-rc.33"
+version = "0.1.0-rc.34"
 edition = "2024"
 rust-version = "1.85"
 publish = false
@@ -23,6 +23,8 @@ tree-sitter-python = "=0.25.0"
 tree-sitter-javascript = "=0.25.0"
 tree-sitter-typescript = "=0.23.2"
 tree-sitter-go = "=0.25.0"
+unicode-casefold = "=0.2.0"
+unicode-normalization = "=0.1.25"
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "=0.1.11"

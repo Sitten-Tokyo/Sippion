@@ -34,6 +34,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate README bootstrap pins
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-bootstrap-pins.py
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
         with:
@@ -76,6 +82,30 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
+  pr-binding:
+    name: Bind PR base/head for auto-merge
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Record tested PR base/head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" > ci-binding.txt
+
+      - name: Upload base/head binding
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-binding-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          path: ci-binding.txt
+          if-no-files-found: error
+          retention-days: 1
+
   security-audit:
     name: RustSec dependency audit
     runs-on: ubuntu-24.04
@@ -92,3 +122,9 @@ jobs:
 
       - name: Audit Cargo.lock against RustSec
         run: cargo audit --file Cargo.lock
+
+      - name: Install pinned cargo-deny
+        run: cargo install cargo-deny --version 0.18.3 --locked
+
+      - name: Enforce dependency licenses and sources
+        run: cargo deny check licenses sources bans

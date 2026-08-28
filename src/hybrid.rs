@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn term_statistics_matches_unicode_case_variants() {
-        let terms = vec!["überprüfung".to_string()];
+        let terms = vec![crate::core::unicode_search_fold("überprüfung")];
         let (_, frequencies) = term_statistics("fn ÜBERPRÜFUNG() {}", &terms);
         assert_eq!(frequencies, vec![1]);
     }
