@@ -31,6 +31,8 @@ jobs:
           text = text.replace("'''          release-assets/install.sh", "'''            release-assets/install.sh")
           text = text.replace("\n          release-assets/install.ps1\n'''", "\n            release-assets/install.ps1\n'''")
           text = text.replace("\n          release-assets/sippion.cdx.json\n'''", "\n            release-assets/sippion.cdx.json\n'''")
+          text = text.replace("\n        for binary in \\\n", "\n          for binary in \\\n")
+          text = text.replace("\n        gh attestation verify \"published/sippion.cdx.json\"", "\n          gh attestation verify \"published/sippion.cdx.json\"")
           path.write_text(text)
           PY
 
@@ -69,7 +71,7 @@ jobs:
               1,
           )
           text = text.replace(
-              "        gh attestation verify \"published/sippion.cdx.json\" \\\n          --repo \"$REPOSITORY\" \\\n          --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n          --source-digest \"$RELEASE_SHA\" >/dev/null\n",
+              "          gh attestation verify \"published/sippion.cdx.json\" \\\n          --repo \"$REPOSITORY\" \\\n          --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n          --source-digest \"$RELEASE_SHA\" >/dev/null\n",
               "        if [ -f published/sippion.cdx.json ]; then\n          gh attestation verify \"published/sippion.cdx.json\" \\\n            --repo \"$REPOSITORY\" \\\n            --signer-workflow \"$REPOSITORY/.github/workflows/release-draft.yml\" \\\n            --source-digest \"$RELEASE_SHA\" >/dev/null\n        fi\n",
               1,
           )
