@@ -48,12 +48,14 @@ jobs:
           cargo build --release --locked
           python3 scripts/retrieval-eval.py --binary target/release/sippion
 
-      - name: Commit generated feature changes
+      - name: Commit validated non-workflow changes
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          git restore -- .github/workflows/author-auto-merge.yml .github/workflows/ci.yml .github/workflows/release-draft.yml .github/workflows/release-supply-chain-smoke.yml scripts/apply_quality_features.py
+          rm -f .github/workflows/mcp-registry-publish.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
