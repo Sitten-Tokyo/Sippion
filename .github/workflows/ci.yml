@@ -82,6 +82,24 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
+      - name: Run retrieval quality and context budget evaluation
+        if: runner.os == 'Linux'
+        run: python3 scripts/retrieval-eval.py --binary target/release/sippion
+
+      - name: Set up pinned Node.js for official MCP client
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.19.0'
+
+      - name: Install exact official MCP client
+        if: runner.os == 'Linux'
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @modelcontextprotocol/client@2.0.0
+
+      - name: Run external MCP protocol conformance
+        if: runner.os == 'Linux'
+        run: node scripts/mcp-conformance.mjs target/release/sippion eval/fixture
+
   pr-binding:
     name: Bind PR base/head for auto-merge
     if: github.event_name == 'pull_request'
