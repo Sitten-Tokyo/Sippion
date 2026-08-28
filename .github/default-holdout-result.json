@@ -1,0 +1,630 @@
+{
+  "baselineRoot": "/home/runner/work/_temp/sippion-default-holdout",
+  "baselineSourceFiles": 37,
+  "baselineEstimatedTokens": 185923,
+  "tokenEstimator": "sippion heuristic-v3 via estimate-tokens CLI",
+  "recallAt5": 0.875,
+  "mrr": 0.7929,
+  "expectedPathRecallAt5": 0.8,
+  "packedExpectedPathRecall": 0.9,
+  "requiredEvidenceAnchorRecall": 0.6667,
+  "averageEstimatedTokens": 1230.75,
+  "p95EstimatedTokens": 1474.25,
+  "averageTokenSavingsVsFullSource": 0.9934,
+  "averageTokenSavingsVsTopKFullFiles": 0.9663,
+  "averageTokenSavingsVsGrepWindows": -0.7937,
+  "averageRelevantPathsPer1kTokens": 0.9238,
+  "averageEvidenceAnchorsPer1kTokens": 0.6024,
+  "averageRetrievalUnnecessaryFileRatio": 0.9245,
+  "averagePackedUnnecessaryFileRatio": 0.9063,
+  "averageUnnecessaryFileRatio": 0.9063,
+  "p50LatencyMs": 458.56,
+  "p95LatencyMs": 480.61,
+  "cases": [
+    {
+      "name": "engine-diagnostics",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/service.rs",
+        "src/service/engine.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/service.rs",
+        "src/service/engine.rs"
+      ],
+      "requiredAnchors": [
+        "RepositoryEngine",
+        "ContextDiagnostics"
+      ],
+      "matchedAnchors": [
+        "ContextDiagnostics"
+      ],
+      "retrievalFiles": [
+        "src/service.rs",
+        "src/service/engine.rs",
+        "docs/architecture.md",
+        "src/core.rs",
+        "src/main.rs",
+        "docs/history/CHANGES_RC25.md",
+        "CHANGELOG.md",
+        "README.md",
+        "src/repo/map.rs",
+        "scripts/retrieval-eval.py",
+        "docs/security.md",
+        "scripts/prepare-mcpb.py",
+        "src/repo.rs",
+        "src/mcp_tests.rs",
+        "scripts/tune-context.py",
+        "src/service/context.rs"
+      ],
+      "packedFiles": [
+        "src/service.rs",
+        "docs/architecture.md",
+        "src/service/engine.rs",
+        "CHANGELOG.md",
+        "docs/history/CHANGES_RC25.md",
+        "README.md",
+        "docs/security.md",
+        "scripts/prepare-mcpb.py",
+        "src/repo/map.rs",
+        "src/core.rs",
+        "src/main.rs",
+        "src/mcp_tests.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.875,
+      "packedUnnecessaryFileRatio": 0.8333,
+      "returnedBytes": 3237,
+      "estimatedTokens": 1079,
+      "tokenSavingsVsFullSource": 0.9942,
+      "topKFullFilesBaselineTokens": 31038,
+      "topKFullFilesBaselinePaths": [
+        "src/service.rs",
+        "src/service/engine.rs",
+        "src/core.rs",
+        "src/main.rs",
+        "src/repo/map.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9652,
+      "grepWindowBaselineTokens": 600,
+      "grepWindowBaselinePaths": [
+        "src/core.rs",
+        "src/service.rs",
+        "src/service/engine.rs",
+        "src/main.rs",
+        "scripts/generate-server-json.py"
+      ],
+      "tokenSavingsVsGrepWindows": -0.7983,
+      "relevantPathsPer1kTokens": 1.8536,
+      "evidenceAnchorsPer1kTokens": 0.9268,
+      "elapsedMs": 467.9
+    },
+    {
+      "name": "unicode-retrieval",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/core.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/core.rs"
+      ],
+      "requiredAnchors": [
+        "unicode_search_fold"
+      ],
+      "matchedAnchors": [
+        "unicode_search_fold"
+      ],
+      "retrievalFiles": [
+        "src/core.rs",
+        "src/hybrid.rs",
+        "src/repo/tests.rs",
+        "CHANGELOG.md",
+        "tests/post_audit_regressions.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/ranking.rs",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "scripts/retrieval-eval.py",
+        "src/repo/policy.rs",
+        "tests/unicode_search.rs",
+        "src/repo/map.rs",
+        "Cargo.toml",
+        "README.md",
+        "src/repo.rs",
+        "src/service/engine.rs"
+      ],
+      "packedFiles": [
+        "src/core.rs",
+        "CHANGELOG.md",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "tests/post_audit_regressions.rs",
+        "src/repo/tests.rs",
+        "src/repo/ranking.rs",
+        "src/hybrid.rs",
+        "src/repo/adaptive.rs",
+        "Cargo.toml",
+        "scripts/retrieval-eval.py",
+        "tests/unicode_search.rs",
+        "src/repo/map.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9375,
+      "packedUnnecessaryFileRatio": 0.9167,
+      "returnedBytes": 4404,
+      "estimatedTokens": 1476,
+      "tokenSavingsVsFullSource": 0.9921,
+      "topKFullFilesBaselineTokens": 40844,
+      "topKFullFilesBaselinePaths": [
+        "src/core.rs",
+        "src/hybrid.rs",
+        "src/repo/tests.rs",
+        "tests/post_audit_regressions.rs",
+        "src/repo/adaptive.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9639,
+      "grepWindowBaselineTokens": 664,
+      "grepWindowBaselinePaths": [
+        "src/core.rs",
+        "src/hybrid.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/ranking.rs",
+        "src/repo/tests.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -1.2229,
+      "relevantPathsPer1kTokens": 0.6775,
+      "evidenceAnchorsPer1kTokens": 0.6775,
+      "elapsedMs": 438.21
+    },
+    {
+      "name": "fingerprint-consistency",
+      "rank": 7,
+      "expectedPathsAt5": [],
+      "packedExpectedPaths": [
+        "src/repo/map.rs",
+        "src/repo/ranking.rs"
+      ],
+      "requiredAnchors": [
+        "source_content_fingerprint"
+      ],
+      "matchedAnchors": [
+        "source_content_fingerprint"
+      ],
+      "retrievalFiles": [
+        "src/repo/search.rs",
+        "src/repo.rs",
+        "docs/architecture.md",
+        "docs/history/CHANGES_RC30.md",
+        "src/repo/tests.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/map.rs",
+        "CHANGELOG.md",
+        "docs/history/CHANGES_RC28.md",
+        "src/repo/ranking.rs",
+        "scripts/prepare-mcpb.py",
+        "docs/history/VALIDATION_RC29.md",
+        "src/service/engine.rs",
+        "src/hybrid.rs",
+        "scripts/retrieval-eval.py",
+        "src/core.rs"
+      ],
+      "packedFiles": [
+        "src/repo.rs",
+        "docs/architecture.md",
+        "docs/history/CHANGES_RC30.md",
+        "CHANGELOG.md",
+        "docs/history/CHANGES_RC28.md",
+        "scripts/prepare-mcpb.py",
+        "docs/history/VALIDATION_RC29.md",
+        "src/repo/map.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/tests.rs",
+        "src/repo/search.rs",
+        "src/repo/ranking.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.875,
+      "packedUnnecessaryFileRatio": 0.8333,
+      "returnedBytes": 3402,
+      "estimatedTokens": 1134,
+      "tokenSavingsVsFullSource": 0.9939,
+      "topKFullFilesBaselineTokens": 59579,
+      "topKFullFilesBaselinePaths": [
+        "src/repo/search.rs",
+        "src/repo.rs",
+        "src/repo/tests.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/map.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.981,
+      "grepWindowBaselineTokens": 643,
+      "grepWindowBaselinePaths": [
+        "src/repo.rs",
+        "src/repo/search.rs",
+        "src/repo/tests.rs",
+        "src/repo/adaptive.rs",
+        "src/repo/map.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.7636,
+      "relevantPathsPer1kTokens": 1.7637,
+      "evidenceAnchorsPer1kTokens": 0.8818,
+      "elapsedMs": 461.89
+    },
+    {
+      "name": "adaptive-rarity",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/repo/adaptive.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/repo/adaptive.rs"
+      ],
+      "requiredAnchors": [
+        "normalized_idf_rarity"
+      ],
+      "matchedAnchors": [
+        "normalized_idf_rarity"
+      ],
+      "retrievalFiles": [
+        "src/repo/adaptive.rs",
+        "CHANGELOG.md",
+        "src/repo/search.rs",
+        "src/repo.rs",
+        "src/repo/ranking.rs",
+        "scripts/tune-context.py",
+        "src/hybrid.rs",
+        "src/service/context.rs",
+        "src/service/engine.rs",
+        "src/repo/tests.rs",
+        "docs/history/CHANGES_RC26.md",
+        "src/core.rs",
+        "src/service.rs",
+        "docs/integrations.md",
+        "README.md",
+        "docs/architecture.md",
+        "docs/history/CHANGES_RC29.md",
+        "docs/history/CHANGES_RC27.md",
+        "CONTRIBUTING.md",
+        "docs/history/VALIDATION_RC29.md",
+        "docs/history/CHANGES_RC30.md",
+        "docs/clients.md",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "scripts/prepare-mcpb.py"
+      ],
+      "packedFiles": [
+        "src/repo/adaptive.rs",
+        "CHANGELOG.md",
+        "README.md",
+        "docs/integrations.md",
+        "docs/history/CHANGES_RC26.md",
+        "docs/architecture.md",
+        "src/repo/search.rs",
+        "src/repo/ranking.rs",
+        "scripts/tune-context.py",
+        "src/core.rs",
+        "src/hybrid.rs",
+        "src/repo/tests.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9583,
+      "packedUnnecessaryFileRatio": 0.9167,
+      "returnedBytes": 3650,
+      "estimatedTokens": 1217,
+      "tokenSavingsVsFullSource": 0.9935,
+      "topKFullFilesBaselineTokens": 33825,
+      "topKFullFilesBaselinePaths": [
+        "src/repo/adaptive.rs",
+        "src/repo/search.rs",
+        "src/repo.rs",
+        "src/repo/ranking.rs",
+        "scripts/tune-context.py"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.964,
+      "grepWindowBaselineTokens": 669,
+      "grepWindowBaselinePaths": [
+        "src/repo/adaptive.rs",
+        "src/repo/search.rs",
+        "src/repo.rs",
+        "src/repo/ranking.rs",
+        "src/repo/tests.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.8191,
+      "relevantPathsPer1kTokens": 0.8217,
+      "evidenceAnchorsPer1kTokens": 0.8217,
+      "elapsedMs": 478.85
+    },
+    {
+      "name": "semantic-import-neighbor",
+      "rank": 5,
+      "expectedPathsAt5": [
+        "src/repo/map.rs"
+      ],
+      "packedExpectedPaths": [],
+      "requiredAnchors": [
+        "semantic_expansion_paths"
+      ],
+      "matchedAnchors": [],
+      "retrievalFiles": [
+        "docs/architecture.md",
+        "docs/history/CHANGES_RC26.md",
+        "docs/integrations.md",
+        "CHANGELOG.md",
+        "src/repo/map.rs",
+        "src/service/context.rs",
+        "README.md",
+        "scripts/tune-context.py",
+        "src/hybrid.rs",
+        "src/syntax.rs",
+        "CONTRIBUTING.md",
+        "src/repo.rs",
+        "scripts/check-bootstrap-pins.py",
+        "src/repo/adaptive.rs",
+        "scripts/generate-server-json.py",
+        "scripts/prepare-mcpb.py"
+      ],
+      "packedFiles": [
+        "docs/architecture.md",
+        "CHANGELOG.md",
+        "docs/history/CHANGES_RC26.md",
+        "docs/integrations.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "scripts/generate-server-json.py",
+        "scripts/prepare-mcpb.py",
+        "scripts/check-bootstrap-pins.py",
+        "scripts/tune-context.py",
+        "src/repo.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9375,
+      "packedUnnecessaryFileRatio": 1.0,
+      "returnedBytes": 2865,
+      "estimatedTokens": 955,
+      "tokenSavingsVsFullSource": 0.9949,
+      "topKFullFilesBaselineTokens": 34188,
+      "topKFullFilesBaselinePaths": [
+        "src/repo/map.rs",
+        "src/service/context.rs",
+        "scripts/tune-context.py",
+        "src/hybrid.rs",
+        "src/syntax.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9721,
+      "grepWindowBaselineTokens": 564,
+      "grepWindowBaselinePaths": [
+        "src/repo/map.rs",
+        "src/service/context.rs",
+        "scripts/tune-context.py",
+        "src/hybrid.rs",
+        "src/repo.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.6933,
+      "relevantPathsPer1kTokens": 0.0,
+      "evidenceAnchorsPer1kTokens": 0.0,
+      "elapsedMs": 336.08
+    },
+    {
+      "name": "redaction-oversize",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/repo/redaction.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/repo/redaction.rs"
+      ],
+      "requiredAnchors": [
+        "REDACTED_OVERSIZE_LINE"
+      ],
+      "matchedAnchors": [
+        "REDACTED_OVERSIZE_LINE"
+      ],
+      "retrievalFiles": [
+        "src/repo/redaction.rs",
+        "docs/history/CHANGES_RC29.md",
+        "src/repo.rs",
+        "tests/redaction_corpus.rs",
+        "src/repo/tests.rs",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "src/repo/map.rs",
+        "docs/history/CHANGES_RC25.md",
+        "docs/history/VALIDATION_RC29.md",
+        "tests/post_audit_regressions.rs",
+        "CHANGELOG.md",
+        "src/repo/search.rs",
+        "SECURITY.md",
+        "src/setup.rs",
+        "src/core.rs",
+        "docs/history/CHANGES_RC27.md"
+      ],
+      "packedFiles": [
+        "src/repo/redaction.rs",
+        "docs/history/CHANGES_RC29.md",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "CHANGELOG.md",
+        "docs/history/VALIDATION_RC29.md",
+        "docs/history/CHANGES_RC25.md",
+        "tests/redaction_corpus.rs",
+        "tests/post_audit_regressions.rs",
+        "src/repo/tests.rs",
+        "src/repo.rs",
+        "src/core.rs",
+        "src/repo/map.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9375,
+      "packedUnnecessaryFileRatio": 0.9167,
+      "returnedBytes": 4413,
+      "estimatedTokens": 1471,
+      "tokenSavingsVsFullSource": 0.9921,
+      "topKFullFilesBaselineTokens": 55131,
+      "topKFullFilesBaselinePaths": [
+        "src/repo/redaction.rs",
+        "src/repo.rs",
+        "tests/redaction_corpus.rs",
+        "src/repo/tests.rs",
+        "src/repo/map.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9733,
+      "grepWindowBaselineTokens": 862,
+      "grepWindowBaselinePaths": [
+        "src/repo.rs",
+        "src/repo/redaction.rs",
+        "src/repo/tests.rs",
+        "src/repo/map.rs",
+        "src/repo/search.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.7065,
+      "relevantPathsPer1kTokens": 0.6798,
+      "evidenceAnchorsPer1kTokens": 0.6798,
+      "elapsedMs": 449.48
+    },
+    {
+      "name": "mcp-cancel",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/mcp.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/mcp.rs"
+      ],
+      "requiredAnchors": [
+        "InflightRequest"
+      ],
+      "matchedAnchors": [
+        "InflightRequest"
+      ],
+      "retrievalFiles": [
+        "src/mcp.rs",
+        "src/mcp_tests.rs",
+        "src/repo/search.rs",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "docs/history/CHANGES_RC25.md",
+        "docs/history/VALIDATION_RC29.md",
+        "tests/unicode_search.rs",
+        "tests/redaction_corpus.rs",
+        "docs/history/CHANGES_RC30.md",
+        "tests/ignore_completeness.rs",
+        "src/repo/access.rs",
+        "tests/post_audit_regressions.rs",
+        "src/service/engine.rs",
+        "src/service.rs",
+        "src/repo/map.rs",
+        "src/repo/tests.rs"
+      ],
+      "packedFiles": [
+        "src/mcp.rs",
+        "src/mcp_tests.rs",
+        "docs/history/CHANGES_RC25.md",
+        "docs/history/PATCH_NOTES_20260816.md",
+        "docs/history/VALIDATION_RC29.md",
+        "docs/history/CHANGES_RC30.md",
+        "src/repo/search.rs",
+        "src/service.rs",
+        "src/repo/tests.rs",
+        "src/repo/map.rs",
+        "tests/post_audit_regressions.rs",
+        "tests/unicode_search.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9375,
+      "packedUnnecessaryFileRatio": 0.9167,
+      "returnedBytes": 3604,
+      "estimatedTokens": 1202,
+      "tokenSavingsVsFullSource": 0.9935,
+      "topKFullFilesBaselineTokens": 33440,
+      "topKFullFilesBaselinePaths": [
+        "src/mcp.rs",
+        "src/mcp_tests.rs",
+        "src/repo/search.rs",
+        "tests/unicode_search.rs",
+        "tests/redaction_corpus.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9641,
+      "grepWindowBaselineTokens": 656,
+      "grepWindowBaselinePaths": [
+        "src/mcp.rs",
+        "src/mcp_tests.rs",
+        "src/repo/access.rs",
+        "src/repo/map.rs",
+        "src/repo/search.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.8323,
+      "relevantPathsPer1kTokens": 0.8319,
+      "evidenceAnchorsPer1kTokens": 0.8319,
+      "elapsedMs": 455.24
+    },
+    {
+      "name": "root-project-safety",
+      "rank": 1,
+      "expectedPathsAt5": [
+        "src/root.rs"
+      ],
+      "packedExpectedPaths": [
+        "src/root.rs"
+      ],
+      "requiredAnchors": [
+        "PROJECT_MARKERS"
+      ],
+      "matchedAnchors": [],
+      "retrievalFiles": [
+        "src/root.rs",
+        "tests/cli_health.rs",
+        "src/main.rs",
+        "src/setup_tests.rs",
+        "docs/security.md",
+        "src/setup.rs",
+        "docs/clients.md",
+        "README.ja.md",
+        "README.md",
+        "src/core.rs",
+        "src/repo/tests.rs",
+        "tests/ignore_completeness.rs",
+        "tests/post_audit_regressions.rs",
+        "tests/redaction_corpus.rs",
+        "scripts/prepare-mcpb.py",
+        "docs/architecture.md"
+      ],
+      "packedFiles": [
+        "src/root.rs",
+        "docs/security.md",
+        "README.md",
+        "README.ja.md",
+        "docs/clients.md",
+        "tests/cli_health.rs",
+        "src/main.rs",
+        "tests/ignore_completeness.rs",
+        "src/setup_tests.rs",
+        "src/repo/tests.rs",
+        "scripts/prepare-mcpb.py",
+        "tests/redaction_corpus.rs"
+      ],
+      "retrievalUnnecessaryFileRatio": 0.9375,
+      "packedUnnecessaryFileRatio": 0.9167,
+      "returnedBytes": 3920,
+      "estimatedTokens": 1312,
+      "tokenSavingsVsFullSource": 0.9929,
+      "topKFullFilesBaselineTokens": 24513,
+      "topKFullFilesBaselinePaths": [
+        "src/root.rs",
+        "tests/cli_health.rs",
+        "src/main.rs",
+        "src/setup_tests.rs",
+        "src/setup.rs"
+      ],
+      "tokenSavingsVsTopKFullFiles": 0.9465,
+      "grepWindowBaselineTokens": 867,
+      "grepWindowBaselinePaths": [
+        "src/root.rs",
+        "src/setup.rs",
+        "src/core.rs",
+        "src/main.rs",
+        "src/repo/tests.rs"
+      ],
+      "tokenSavingsVsGrepWindows": -0.5133,
+      "relevantPathsPer1kTokens": 0.7622,
+      "evidenceAnchorsPer1kTokens": 0.0,
+      "elapsedMs": 481.55
+    }
+  ],
+  "failures": [
+    "engine-diagnostics: required evidence anchors missing from model-visible context: ['RepositoryEngine']",
+    "semantic-import-neighbor: required evidence anchors missing from model-visible context: ['semantic_expansion_paths']",
+    "root-project-safety: required evidence anchors missing from model-visible context: ['PROJECT_MARKERS']",
+    "Recall@5 0.875 < 1.000",
+    "expected-path Recall@5 0.800 < 0.900",
+    "required evidence anchor recall 0.667 < 1.000",
+    "average packed unnecessary file ratio 0.906 > 0.900"
+  ],
+  "evaluationExitCode": 0
+}
