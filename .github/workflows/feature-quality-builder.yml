@@ -24,7 +24,11 @@ jobs:
           fetch-depth: 0
 
       - name: Apply feature implementation
-        run: python3 scripts/apply_quality_features.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/Sippion exposes one tool/It exposes one tool/' scripts/apply_quality_features.py
+          python3 scripts/apply_quality_features.py
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
