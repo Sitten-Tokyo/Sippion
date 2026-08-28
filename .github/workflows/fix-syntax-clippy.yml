@@ -38,7 +38,7 @@ jobs:
               raise SystemExit(f"expected exactly one duplicate line, removed={removed}")
           path.write_text("\n".join(out) + "\n")
           PY
-          cargo fmt --check
+          cargo fmt
 
       - name: Commit fix
         shell: bash
