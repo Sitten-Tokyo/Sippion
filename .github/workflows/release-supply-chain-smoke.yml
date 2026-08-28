@@ -3,6 +3,8 @@ name: Release supply-chain smoke
 on:
   pull_request:
     paths:
+      - Cargo.toml
+      - Cargo.lock
       - scripts/bootstrap.sh
       - scripts/bootstrap.ps1
       - scripts/install.sh
@@ -54,6 +56,15 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Generate and validate CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --version '=0.5.9' --locked
+          cargo cyclonedx --format json --spec-version 1.5 --override-filename sippion.cdx
+          test -s sippion.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and .metadata.component.name == "sippion"' sippion.cdx.json >/dev/null
+
       - name: Download platform artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -65,6 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -s sippion.cdx.json
           for artifact in \
             sippion-linux-x86_64 \
             sippion-windows-x86_64.exe \
@@ -83,12 +95,15 @@ jobs:
           mkdir -p installer-smoke
           cp scripts/install.sh installer-smoke/install.sh
           cp scripts/install.ps1 installer-smoke/install.ps1
+          cp sippion.cdx.json installer-smoke/sippion.cdx.json
           (
             cd installer-smoke
             sha256sum install.sh > install.sh.sha256
             sha256sum install.ps1 > install.ps1.sha256
+            sha256sum sippion.cdx.json > sippion.cdx.json.sha256
             sha256sum -c install.sh.sha256
             sha256sum -c install.ps1.sha256
+            sha256sum -c sippion.cdx.json.sha256
           )
 
   verify-published-policy:
@@ -160,6 +175,7 @@ jobs:
       - name: Download complete published asset set
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -183,6 +199,9 @@ jobs:
             sippion-macos-x86_64
             sippion-macos-x86_64.sha256
           )
+          if [ "$EVENT_NAME" = "release" ] || [ "$EVENT_NAME" = "workflow_run" ]; then
+            expected+=(sippion.cdx.json sippion.cdx.json.sha256)
+          fi
           for asset in "${expected[@]}"; do
             test -s "published/$asset" || { echo "Missing release asset: $asset" >&2; exit 2; }
           done
@@ -202,6 +221,9 @@ jobs:
             sippion-macos-x86_64.sha256; do
             sha256sum -c "$sidecar"
           done
+          if [ -f sippion.cdx.json.sha256 ]; then
+            sha256sum -c sippion.cdx.json.sha256
+          fi
 
       - name: Verify every published provenance attestation
         env:
@@ -215,6 +237,12 @@ jobs:
               --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
               --source-digest "$RELEASE_SHA" >/dev/null
           done
+          if [ -f published/sippion.cdx.json ]; then
+            gh attestation verify "published/sippion.cdx.json" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release-draft.yml" \
+              --source-digest "$RELEASE_SHA" >/dev/null
+          fi
           for binary in \
             sippion-linux-x86_64 \
             sippion-windows-x86_64.exe \

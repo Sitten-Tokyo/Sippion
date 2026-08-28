@@ -26,6 +26,12 @@ fn language_for_path(path: &str) -> Option<Language> {
         "ts" | "mts" | "cts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         "go" => Some(tree_sitter_go::LANGUAGE.into()),
+        "java" => Some(tree_sitter_java::LANGUAGE.into()),
+        "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        "c" => Some(tree_sitter_c::LANGUAGE.into()),
+        "cc" | "cpp" | "cxx" | "c++" | "h" | "hh" | "hpp" | "hxx" | "ipp" | "tpp" => {
+            Some(tree_sitter_cpp::LANGUAGE.into())
+        }
         _ => None,
     }
 }
@@ -56,6 +62,17 @@ fn declaration_kind(node: &Node<'_>) -> Option<&'static str> {
         "interface_declaration" => Some("interface"),
         "type_alias_declaration" | "type_spec" => Some("type"),
         "enum_declaration" => Some("enum"),
+        // Java / C# / C / C++ declarations not covered by the shared names above.
+        "constructor_declaration" | "local_function_statement" | "function_declarator" => {
+            Some("function")
+        }
+        "struct_declaration" | "struct_specifier" => Some("struct"),
+        "class_specifier" | "record_declaration" => Some("class"),
+        "union_specifier" => Some("union"),
+        "enum_specifier" => Some("enum"),
+        "annotation_type_declaration" => Some("interface"),
+        "delegate_declaration" | "type_definition" => Some("type"),
+        "namespace_definition" => Some("module"),
         // Common JavaScript/TypeScript style: `const authenticate = (...) => ...`.
         "variable_declarator" => node
             .child_by_field_name("value")
@@ -70,20 +87,55 @@ fn declaration_kind(node: &Node<'_>) -> Option<&'static str> {
     }
 }
 
-fn identifier_child(node: Node<'_>) -> Option<Node<'_>> {
-    if let Some(name) = node.child_by_field_name("name") {
-        return Some(name);
-    }
-    for index in 0..node.named_child_count() {
-        let child = named_child(&node, index)?;
-        if matches!(
-            child.kind(),
-            "identifier" | "type_identifier" | "field_identifier" | "property_identifier"
-        ) {
-            return Some(child);
+fn is_identifier_like(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "identifier"
+            | "type_identifier"
+            | "field_identifier"
+            | "property_identifier"
+            | "namespace_identifier"
+            | "operator_name"
+    )
+}
+
+fn identifier_descendant(node: Node<'_>) -> Option<Node<'_>> {
+    let mut stack = vec![node];
+    let mut visited = 0usize;
+    while let Some(current) = stack.pop() {
+        visited = visited.saturating_add(1);
+        if visited > 64 {
+            return None;
+        }
+        if is_identifier_like(current) {
+            return Some(current);
+        }
+        for field in ["name", "declarator"] {
+            if let Some(child) = current.child_by_field_name(field) {
+                if is_identifier_like(child) {
+                    return Some(child);
+                }
+                stack.push(child);
+            }
+        }
+        for index in (0..current.named_child_count()).rev() {
+            if let Some(child) = named_child(&current, index) {
+                stack.push(child);
+            }
         }
     }
     None
+}
+
+fn identifier_child(node: Node<'_>) -> Option<Node<'_>> {
+    for field in ["name", "declarator"] {
+        if let Some(child) = node.child_by_field_name(field) {
+            if let Some(identifier) = identifier_descendant(child) {
+                return Some(identifier);
+            }
+        }
+    }
+    identifier_descendant(node)
 }
 
 const AST_PARSE_FILE_BUDGET: Duration = Duration::from_millis(500);
@@ -215,7 +267,15 @@ fn semantic_identifier_kind(node: Node<'_>) -> &'static str {
         };
         if matches!(
             ancestor.kind(),
-            "impl_item" | "implements_clause" | "extends_clause" | "superclass" | "trait_bounds"
+            "impl_item"
+                | "implements_clause"
+                | "extends_clause"
+                | "superclass"
+                | "super_interfaces"
+                | "extends_interfaces"
+                | "base_list"
+                | "type_list"
+                | "trait_bounds"
         ) {
             return "implementation";
         }
@@ -229,7 +289,13 @@ fn semantic_identifier_kind(node: Node<'_>) -> &'static str {
         };
         if matches!(
             ancestor.kind(),
-            "call_expression" | "call" | "macro_invocation" | "await_expression"
+            "call_expression"
+                | "call"
+                | "macro_invocation"
+                | "await_expression"
+                | "method_invocation"
+                | "invocation_expression"
+                | "object_creation_expression"
         ) {
             return "call";
         }
@@ -250,6 +316,10 @@ fn semantic_identifier_kind(node: Node<'_>) -> &'static str {
                 | "pointer_type"
                 | "slice_type"
                 | "array_type"
+                | "type_list"
+                | "base_list"
+                | "superclass"
+                | "object_creation_expression"
         )
     }) {
         return "type";
@@ -270,6 +340,15 @@ fn quoted_fragment(line: &str) -> Option<&str> {
     let tail = &line[start + 1..];
     let end = tail.as_bytes().iter().position(|byte| *byte == quote)?;
     Some(&tail[..end])
+}
+
+fn include_fragment(line: &str) -> Option<&str> {
+    quoted_fragment(line).or_else(|| {
+        let start = line.find('<')?;
+        let tail = &line[start + 1..];
+        let end = tail.find('>')?;
+        Some(&tail[..end])
+    })
 }
 
 fn import_paths_from_source_bounded(
@@ -344,13 +423,43 @@ fn import_paths_from_source_bounded(
                     None
                 }
             }
+            "java" => trimmed.strip_prefix("import ").map(|rest| {
+                rest.trim_start_matches("static ")
+                    .trim_end_matches(';')
+                    .trim()
+            }),
+            "cs" => {
+                let rest = trimmed
+                    .strip_prefix("global using ")
+                    .or_else(|| trimmed.strip_prefix("using "));
+                rest.map(|rest| {
+                    let rest = rest
+                        .trim_start_matches("static ")
+                        .trim_end_matches(';')
+                        .trim();
+                    rest.split_once('=')
+                        .map_or(rest, |(_, target)| target.trim())
+                })
+            }
+            "c" | "cc" | "cpp" | "cxx" | "c++" | "h" | "hh" | "hpp" | "hxx" | "ipp" | "tpp" => {
+                trimmed
+                    .strip_prefix("#include")
+                    .and_then(|rest| include_fragment(rest.trim()))
+            }
             _ => None,
         };
         if let Some(candidate) = candidate {
             let normalized = candidate
                 .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch == '`')
-                .replace("::", "/")
-                .replace('.', "/");
+                .replace("::", "/");
+            let normalized = if matches!(
+                extension.as_str(),
+                "c" | "cc" | "cpp" | "cxx" | "c++" | "h" | "hh" | "hpp" | "hxx" | "ipp" | "tpp"
+            ) {
+                normalized
+            } else {
+                normalized.replace('.', "/")
+            };
             if !normalized.is_empty() && seen.insert(normalized.clone()) {
                 imports.push(normalized);
             }
@@ -427,7 +536,11 @@ pub fn extract_semantic_facts_bounded(
         }
         if matches!(
             node.kind(),
-            "identifier" | "type_identifier" | "field_identifier"
+            "identifier"
+                | "type_identifier"
+                | "field_identifier"
+                | "namespace_identifier"
+                | "operator_name"
         ) && !definition_ranges.contains(&(node.start_byte(), node.end_byte()))
         {
             if let Ok(name) = node.utf8_text(bytes) {
@@ -493,6 +606,47 @@ mod tests {
     }
 
     #[test]
+    fn java_ast_extracts_class_and_method() {
+        let source =
+            "class AuthService { boolean validate(String token) { return !token.isEmpty(); } }
+";
+        let symbols = extract_ast_symbols("src/AuthService.java", source, 8).expect("java grammar");
+        assert!(symbols.iter().any(|symbol| symbol.name == "AuthService"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "validate"));
+    }
+
+    #[test]
+    fn csharp_ast_extracts_class_and_method() {
+        let source =
+            "class AuthService { bool Validate(string token) { return token.Length > 0; } }
+";
+        let symbols = extract_ast_symbols("src/AuthService.cs", source, 8).expect("csharp grammar");
+        assert!(symbols.iter().any(|symbol| symbol.name == "AuthService"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "Validate"));
+    }
+
+    #[test]
+    fn c_and_cpp_ast_extract_functions_and_types() {
+        let c_source =
+            "struct Session { int value; }; int validate_token(int token) { return token > 0; }
+";
+        let c_symbols = extract_ast_symbols("src/auth.c", c_source, 8).expect("c grammar");
+        assert!(c_symbols.iter().any(|symbol| symbol.name == "Session"));
+        assert!(
+            c_symbols
+                .iter()
+                .any(|symbol| symbol.name == "validate_token")
+        );
+
+        let cpp_source =
+            "class Validator { public: bool validate(int token) { return token > 0; } };
+";
+        let cpp_symbols = extract_ast_symbols("src/auth.hpp", cpp_source, 8).expect("cpp grammar");
+        assert!(cpp_symbols.iter().any(|symbol| symbol.name == "Validator"));
+        assert!(cpp_symbols.iter().any(|symbol| symbol.name == "validate"));
+    }
+
+    #[test]
     fn unsupported_language_uses_caller_fallback() {
         assert!(extract_ast_symbols("notes.txt", "function nope() {}", 8).is_none());
     }
@@ -536,6 +690,65 @@ mod semantic_tests {
                 .import_paths
                 .iter()
                 .any(|path| path.contains("/auth/session"))
+        );
+    }
+
+    #[test]
+    fn java_and_csharp_semantics_extract_imports_and_calls() {
+        let java = "import com.example.Auth;\nclass Login { void run() { validate(token); } }
+";
+        let java_facts = extract_semantic_facts_bounded("src/Login.java", java, 64, 16, None, None)
+            .expect("java grammar");
+        assert!(
+            java_facts
+                .import_paths
+                .iter()
+                .any(|path| path == "com/example/Auth")
+        );
+        assert!(
+            java_facts
+                .references
+                .iter()
+                .any(|reference| reference.name == "validate" && reference.kind == "call")
+        );
+
+        let csharp = "using Acme.Auth;\nclass Login { void Run() { Validate(token); } }
+";
+        let csharp_facts =
+            extract_semantic_facts_bounded("src/Login.cs", csharp, 64, 16, None, None)
+                .expect("csharp grammar");
+        assert!(
+            csharp_facts
+                .import_paths
+                .iter()
+                .any(|path| path == "Acme/Auth")
+        );
+        assert!(
+            csharp_facts
+                .references
+                .iter()
+                .any(|reference| reference.name == "Validate" && reference.kind == "call")
+        );
+    }
+
+    #[test]
+    fn c_family_semantics_extract_include_and_call() {
+        let source = r#"#include "auth/session.h"
+int login(void) { return validate_token(); }
+"#;
+        let facts = extract_semantic_facts_bounded("src/login.cpp", source, 64, 16, None, None)
+            .expect("cpp grammar");
+        assert!(
+            facts
+                .import_paths
+                .iter()
+                .any(|path| path == "auth/session.h")
+        );
+        assert!(
+            facts
+                .references
+                .iter()
+                .any(|reference| reference.name == "validate_token" && reference.kind == "call")
         );
     }
 }

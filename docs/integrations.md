@@ -21,8 +21,9 @@ No upstream project is vendored or executed at runtime.
 
 The Tier 2 resolver is intentionally **source-only**. It records exact
 syntax-tree identifier references, call/type/implementation contexts, and
-import paths, then connects those references to declarations already present in
-the bounded candidate set.
+import paths for Rust, Python, JavaScript/TypeScript, Go, Java, C#, C, and C++,
+then connects those references to declarations already present in the bounded
+candidate set.
 
 It does **not** execute:
 
