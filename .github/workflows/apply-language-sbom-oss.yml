@@ -28,14 +28,9 @@ jobs:
           from pathlib import Path
           path = Path("scripts/apply_language_sbom_oss.py")
           text = path.read_text()
-          text = text.replace(
-              "'''          release-assets/install.sh\\n          release-assets/install.ps1\\n'''",
-              "'''            release-assets/install.sh\\n            release-assets/install.ps1\\n'''",
-          )
-          text = text.replace(
-              "'''          release-assets/install.sh\\n          release-assets/install.ps1\\n          release-assets/sippion.cdx.json\\n'''",
-              "'''            release-assets/install.sh\\n            release-assets/install.ps1\\n            release-assets/sippion.cdx.json\\n'''",
-          )
+          text = text.replace("'''          release-assets/install.sh", "'''            release-assets/install.sh")
+          text = text.replace("\n          release-assets/install.ps1\n'''", "\n            release-assets/install.ps1\n'''")
+          text = text.replace("\n          release-assets/sippion.cdx.json\n'''", "\n            release-assets/sippion.cdx.json\n'''")
           path.write_text(text)
           PY
 
@@ -50,9 +45,11 @@ jobs:
           from pathlib import Path
           path = Path(".github/workflows/release-supply-chain-smoke.yml")
           text = path.read_text()
+          release_ref = "$" + "{{ steps.release.outputs.tag }}"
+          event_ref = "$" + "{{ github.event_name }}"
           text = text.replace(
-              "        env:\n          RELEASE_TAG: ${{ steps.release.outputs.tag }}\n        shell: bash\n",
-              "        env:\n          RELEASE_TAG: ${{ steps.release.outputs.tag }}\n          EVENT_NAME: ${{ github.event_name }}\n        shell: bash\n",
+              f"        env:\n          RELEASE_TAG: {release_ref}\n        shell: bash\n",
+              f"        env:\n          RELEASE_TAG: {release_ref}\n          EVENT_NAME: {event_ref}\n        shell: bash\n",
               1,
           )
           text = text.replace(
@@ -65,11 +62,7 @@ jobs:
               "          )\n          if [ \"$EVENT_NAME\" = \"release\" ] || [ \"$EVENT_NAME\" = \"workflow_run\" ]; then\n            expected+=(sippion.cdx.json sippion.cdx.json.sha256)\n          fi\n          for asset in \"${expected[@]}\"; do\n",
               1,
           )
-          text = text.replace(
-              "            sippion.cdx.json.sha256 \\\\\n",
-              "",
-              1,
-          )
+          text = text.replace("            sippion.cdx.json.sha256 \\\n", "", 1)
           text = text.replace(
               "          done\n\n      - name: Verify every published provenance attestation\n",
               "          done\n          if [ -f sippion.cdx.json.sha256 ]; then\n            sha256sum -c sippion.cdx.json.sha256\n          fi\n\n      - name: Verify every published provenance attestation\n",
