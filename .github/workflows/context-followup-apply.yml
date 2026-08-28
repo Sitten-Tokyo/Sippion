@@ -1,0 +1,529 @@
+name: Apply context efficiency follow-up patches
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+    paths:
+      - .github/workflows/context-followup-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          toolchain: 1.85.0
+          components: rustfmt
+
+      - name: Apply follow-up patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'src/main.rs',
+              '''use crate::core::{
+              MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES,
+              heuristic_v3_estimated_tokens,
+          };''',
+              '''use crate::core::{MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES};''',
+          )
+
+          replace_once(
+              'src/main.rs',
+              '''#[derive(Debug, serde::Serialize)]
+          struct RankedFileDiagnostic {
+              path: String,
+              rank: f64,
+          }
+
+          #[derive(Debug, serde::Serialize)]
+          struct QueryDiagnostic {
+              returned_bytes: usize,
+              estimated_tokens: usize,
+              hard_budget_bytes: Option<usize>,
+              target_estimated_tokens: Option<usize>,
+              scanned_bytes: Option<usize>,
+              ranked_files: Vec<RankedFileDiagnostic>,
+          }
+
+          fn parse_numeric_field(line: &str, key: &str) -> Option<usize> {
+              line.split_whitespace().find_map(|part| {
+                  part.strip_prefix(key)
+                      .and_then(|value| value.parse::<usize>().ok())
+              })
+          }
+
+          fn query_diagnostic(context: &str) -> QueryDiagnostic {
+              let mut ranked_files = Vec::new();
+              let mut hard_budget_bytes = None;
+              let mut target_estimated_tokens = None;
+              let mut scanned_bytes = None;
+              for line in context.lines() {
+                  if line.starts_with("CTX ") {
+                      hard_budget_bytes = parse_numeric_field(line, "hard_b=");
+                      target_estimated_tokens = parse_numeric_field(line, "target_t=");
+                      scanned_bytes = parse_numeric_field(line, "scan_b=");
+                  } else if let Some(rest) = line.strip_prefix("S path=") {
+                      let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+                      let Some(Ok(path)) = stream.next() else {
+                          continue;
+                      };
+                      let metadata = rest[stream.byte_offset()..].trim_start();
+                      let Some(rank_text) = metadata
+                          .strip_prefix("rank=")
+                          .and_then(|value| value.split_whitespace().next())
+                      else {
+                          continue;
+                      };
+                      if let Ok(rank) = rank_text.parse::<f64>() {
+                          ranked_files.push(RankedFileDiagnostic { path, rank });
+                      }
+                  }
+              }
+              ranked_files.sort_by(|left, right| {
+                  right
+                      .rank
+                      .partial_cmp(&left.rank)
+                      .unwrap_or(std::cmp::Ordering::Equal)
+              });
+              QueryDiagnostic {
+                  returned_bytes: context.len(),
+                  estimated_tokens: heuristic_v3_estimated_tokens(context),
+                  hard_budget_bytes,
+                  target_estimated_tokens,
+                  scanned_bytes,
+                  ranked_files,
+              }
+          }
+          fn run_query_command''',
+              '''fn run_query_command''',
+          )
+
+          replace_once(
+              'src/main.rs',
+              '''    let context = service
+                  .context(&normalized, Some(&coordination), None)
+                  .map_err(|error| error.user_message().to_string())?;
+              let diagnostic = query_diagnostic(&context);
+          ''',
+              '''    let result = service
+                  .context_result(&normalized, Some(&coordination), None)
+                  .map_err(|error| error.user_message().to_string())?;
+              let context = result.model_text;
+              let diagnostic = result.diagnostics;
+          ''',
+          )
+
+          replace_once(
+              'src/main.rs',
+              '''            diagnostic
+                          .hard_budget_bytes
+                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                      diagnostic
+                          .target_estimated_tokens
+                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                      diagnostic
+                          .scanned_bytes
+                          .map_or_else(|| "unknown".to_string(), |value| value.to_string()),''',
+              '''            diagnostic.hard_budget_bytes,
+                      diagnostic.target_estimated_tokens,
+                      diagnostic.scanned_bytes,''',
+          )
+
+          replace_once(
+              'src/repo/map.rs',
+              '''fn normalized_path_module(path: &str) -> String {
+              let folded = crate::core::unicode_search_fold(path).replace('\\\\', "/");
+              let no_ext = Path::new(&folded)
+                  .with_extension("")
+                  .to_string_lossy()
+                  .replace('\\\\', "/");
+              no_ext
+                  .trim_end_matches("/mod")
+                  .trim_end_matches("/index")
+                  .trim_matches('/')
+                  .to_string()
+          }
+          ''',
+              '''fn normalized_path_module(path: &str) -> String {
+              let folded = crate::core::unicode_search_fold(path).replace('\\\\', "/");
+              let no_ext = Path::new(&folded)
+                  .with_extension("")
+                  .to_string_lossy()
+                  .replace('\\\\', "/");
+              no_ext
+                  .trim_end_matches("/mod")
+                  .trim_end_matches("/index")
+                  .trim_matches('/')
+                  .to_string()
+          }
+
+          fn expansion_directory_distance(seed_path: &str, candidate_path: &str) -> usize {
+              let seed = seed_path.replace('\\\\', "/");
+              let candidate = candidate_path.replace('\\\\', "/");
+              let seed_dir = seed.rsplit_once('/').map_or("", |(dir, _)| dir);
+              let candidate_dir = candidate.rsplit_once('/').map_or("", |(dir, _)| dir);
+              let seed_parts = seed_dir.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
+              let candidate_parts = candidate_dir
+                  .split('/')
+                  .filter(|part| !part.is_empty())
+                  .collect::<Vec<_>>();
+              let common = seed_parts
+                  .iter()
+                  .zip(&candidate_parts)
+                  .take_while(|(left, right)| left == right)
+                  .count();
+              seed_parts.len().saturating_sub(common)
+                  + candidate_parts.len().saturating_sub(common)
+          }
+
+          fn expansion_path_score(
+              seed_path: &str,
+              candidate_path: &str,
+              base: f64,
+              exact_module: bool,
+          ) -> f64 {
+              let distance = expansion_directory_distance(seed_path, candidate_path) as f64;
+              let proximity_bonus = 2.0 / (distance + 1.0);
+              let extension_bonus = if Path::new(seed_path).extension() == Path::new(candidate_path).extension() {
+                  1.0
+              } else {
+                  0.0
+              };
+              let exact_module_bonus = if exact_module { 2.0 } else { 0.0 };
+              base + proximity_bonus + extension_bonus + exact_module_bonus
+          }
+
+          fn ranked_expansion_paths(
+              seed_path: &str,
+              paths: &[String],
+              base: f64,
+              exact_module: bool,
+              limit: usize,
+          ) -> Vec<(String, f64)> {
+              let mut ranked = paths
+                  .iter()
+                  .map(|path| {
+                      (
+                          path.clone(),
+                          expansion_path_score(seed_path, path, base, exact_module),
+                      )
+                  })
+                  .collect::<Vec<_>>();
+              ranked.sort_by(|(left_path, left_score), (right_path, right_score)| {
+                  right_score
+                      .partial_cmp(left_score)
+                      .unwrap_or(Ordering::Equal)
+                      .then_with(|| left_path.cmp(right_path))
+              });
+              ranked.truncate(limit);
+              ranked
+          }
+          ''',
+          )
+
+          replace_once(
+              'src/repo/map.rs',
+              '''        let mut by_stem = HashMap::<String, Vec<String>>::new();
+                  let mut by_module = HashMap::<String, String>::new();
+                  for path in index.files.keys() {
+                      if existing.contains(path.as_str()) {
+                          continue;
+                      }
+                      let module = normalized_path_module(path);
+                      if !module.is_empty() {
+                          by_module
+                              .entry(module.clone())
+                              .or_insert_with(|| path.clone());
+                      }
+                      if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
+                          let stem = crate::core::unicode_search_fold(stem);
+                          if stem.len() >= 2 {
+                              by_stem.entry(stem).or_default().push(path.clone());
+                          }
+                      }
+                  }
+                  drop(index);
+          ''',
+              '''        let mut by_stem = HashMap::<String, Vec<String>>::new();
+                  let mut by_module = HashMap::<String, Vec<String>>::new();
+                  for path in index.files.keys() {
+                      if existing.contains(path.as_str()) {
+                          continue;
+                      }
+                      let module = normalized_path_module(path);
+                      if !module.is_empty() {
+                          by_module.entry(module).or_default().push(path.clone());
+                      }
+                      if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
+                          let stem = crate::core::unicode_search_fold(stem);
+                          if stem.len() >= 2 {
+                              by_stem.entry(stem).or_default().push(path.clone());
+                          }
+                      }
+                  }
+                  drop(index);
+                  for paths in by_stem.values_mut() {
+                      paths.sort();
+                      paths.dedup();
+                  }
+                  for paths in by_module.values_mut() {
+                      paths.sort();
+                      paths.dedup();
+                  }
+          ''',
+          )
+
+          replace_once(
+              'src/repo/map.rs',
+              '''                if let Some(path) = by_module.get(&module) {
+                          scores
+                              .entry(path.clone())
+                              .and_modify(|score| *score = score.max(seed.search_score * 0.08 + 9.0))
+                              .or_insert(seed.search_score * 0.08 + 9.0);
+                      }
+          ''',
+              '''                if let Some(paths) = by_module.get(&module) {
+                          let base = seed.search_score * 0.08 + 9.0;
+                          for (path, candidate_score) in
+                              ranked_expansion_paths(&seed.relative_path, paths, base, true, 4)
+                          {
+                              scores
+                                  .entry(path)
+                                  .and_modify(|score| *score = score.max(candidate_score))
+                                  .or_insert(candidate_score);
+                          }
+                      }
+          ''',
+          )
+
+          replace_once(
+              'src/repo/map.rs',
+              '''                    let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
+                          for path in paths.iter().take(4) {
+                              scores
+                                  .entry(path.clone())
+                                  .and_modify(|score| *score = score.max(base))
+                                  .or_insert(base);
+                          }
+          ''',
+              '''                    let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
+                          for (path, candidate_score) in
+                              ranked_expansion_paths(&seed.relative_path, paths, base, false, 4)
+                          {
+                              scores
+                                  .entry(path)
+                                  .and_modify(|score| *score = score.max(candidate_score))
+                                  .or_insert(candidate_score);
+                          }
+          ''',
+          )
+
+          replace_once(
+              'src/repo/map.rs',
+              '''    #[test]
+              fn import_neighbor_can_enter_structure_without_lexical_query_match() {''',
+              '''    #[test]
+              fn deterministic_expansion_prefers_near_same_language_candidate() {
+                  let paths = vec![
+                      "tests/dependency.rs".to_string(),
+                      "src/dependency.rs".to_string(),
+                      "legacy/dependency.py".to_string(),
+                  ];
+                  let ranked = ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3);
+                  assert_eq!(ranked.first().map(|(path, _)| path.as_str()), Some("src/dependency.rs"));
+                  let reranked = ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3);
+                  assert_eq!(ranked, reranked);
+              }
+
+              #[test]
+              fn import_neighbor_can_enter_structure_without_lexical_query_match() {''',
+          )
+
+          replace_once(
+              'README.md',
+              '''Sippion is a local, read-only MCP server that helps AI coding agents find the
+          right parts of a repository before they start opening source files broadly.
+
+          Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,''',
+              '''Sippion is a local, read-only MCP server that helps AI coding agents find the
+          right parts of a repository before they start opening source files broadly. Its primary
+          job is to organize and bound repository context **before it is passed to an AI model**, so
+          clients avoid spending model-input tokens on irrelevant source while preserving the
+          evidence needed to solve the task.
+
+          Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,''',
+          )
+
+          replace_once(
+              'README.md',
+              '''Retrieval starts with a RAM-only lexical index, parses only ranked candidates,
+          adds bounded source-only semantic evidence, and packs verified excerpts into a
+          bounded response. Structural parsing currently covers Rust, Python,
+          JavaScript/TypeScript, Go, Java, C#, C, and C++. Search-term matching is
+          Unicode-aware while filesystem safety policy remains deliberately separate and
+          conservative.
+          ''',
+              '''Retrieval starts with a RAM-only lexical index, expands scan work only while the
+          previous round is still yielding useful evidence, parses ranked candidates, and can add a
+          bounded set of deterministic import/semantic neighbors. Verified excerpts and structural
+          facts are then selected by utility per estimated token, with redundant same-file context
+          discounted. The estimated-token target is a soft packing goal; an independent byte cap is
+          the hard model-visible output guard. Structural parsing currently covers Rust, Python,
+          JavaScript/TypeScript, Go, Java, C#, C, and C++. Search-term matching is Unicode-aware
+          while filesystem safety policy remains deliberately separate and conservative.
+          ''',
+          )
+
+          replace_once(
+              'README.ja.md',
+              '''Sippion は、AIコーディングエージェントがリポジトリ全体を闇雲に読む前に、
+          **必要そうな箇所を絞り込むためのローカル・読み取り専用MCPサーバー**です。
+
+          公開するツールは `repo_context` の1つだけです。字句検索、構造情報、''',
+              '''Sippion は、AIコーディングエージェントがリポジトリ全体を闇雲に読む前に、
+          **必要そうな箇所を絞り込むためのローカル・読み取り専用MCPサーバー**です。主目的は、
+          **AIへ渡す前のリポジトリコンテキストを整理・上限化し、不要なモデル入力トークンの消費を減らすこと**です。
+          必要な根拠を落とさず、関係の薄いソースをモデルへ大量投入しないことを最適化目標にしています。
+
+          公開するツールは `repo_context` の1つだけです。字句検索、構造情報、''',
+          )
+
+          replace_once(
+              'README.ja.md',
+              '''検索はRAM上の字句インデックスから始まり、上位候補だけを構文解析し、
+          ソースコードだけを対象にした意味的な根拠を追加して、検証済みの断片を上限内にまとめます。
+          検索語の大小文字処理はUnicode対応ですが、filesystem safety policy（ファイルシステム安全規則）は
+          検索品質とは分離した保守的な判定を維持します。
+          ''',
+              '''検索はRAM上の字句インデックスから始まり、直前の探索拡張で有用な根拠が増えている間だけ
+          走査範囲を広げます。上位候補を構文解析し、importや意味関係から得た隣接候補も決定的な順位で
+          上限付き追加を行います。最後に、検証済みコード断片と構造情報を「推定1トークンあたりの有用性」で
+          選び、同じファイルの重複情報には割引をかけてAIへ渡すコンテキストを小さくします。
+          推定トークン数はsoft target（目標値）で、独立したbyte上限がmodel-visible output（AIに見える出力）の
+          hard guard（絶対上限）です。検索語の大小文字処理はUnicode対応ですが、filesystem safety policy
+          （ファイルシステム安全規則）は検索品質とは分離した保守的な判定を維持します。
+          ''',
+          )
+
+          replace_once(
+              'CHANGELOG.md',
+              '''### Changed
+
+          - Release-sensitive pull requests now keep''',
+              '''### Changed
+
+          - Repository context packing now explicitly optimizes utility per estimated model-input token, discounts redundant same-file atoms, and exposes typed retrieval/packing diagnostics without reparsing model-visible text.
+          - Adaptive retrieval confidence now uses exact evidence plus RAM-index document-frequency rarity instead of treating shorter queries as inherently more specific.
+          - Semantic/import expansion now resolves ambiguous same-stem candidates deterministically using module match, directory proximity, language/extension affinity, and path tie-breaking.
+          - Retrieval evaluation now separates search ranking from packed model-visible paths and compares token cost against full-source, top-ranked-full-file, and deterministic grep-window baselines.
+          - Release-sensitive pull requests now keep''',
+          )
+
+          replace_once(
+              'CHANGELOG.md',
+              '''### Documentation
+
+          - Document the Official MCP Registry name''',
+              '''### Documentation
+
+          - State explicitly that Sippion organizes and bounds repository context before it is passed to AI models in order to reduce unnecessary model-input token consumption.
+          - Document the Official MCP Registry name''',
+          )
+
+          replace_once(
+              'docs/architecture.md',
+              '''The result is a compact evidence pack rather than a fixed structure/excerpt
+          percentage split. Narrow, high-confidence queries therefore do not pay for
+          structural metadata merely because a fixed quota was reserved for it, while
+          architecture-oriented queries can spend more of the same bounded budget on
+          symbols and semantic links when those atoms provide better value per token.
+          ''',
+              '''The result is a compact evidence pack rather than a fixed structure/excerpt
+          percentage split. Narrow, high-confidence queries therefore do not pay for
+          structural metadata merely because a fixed quota was reserved for it, while
+          architecture-oriented queries can spend more of the same bounded budget on
+          symbols and semantic links when those atoms provide better value per token.
+
+          Retrieval ranking and model-visible packing are represented separately inside the service.
+          `ContextResult` carries typed diagnostics (retrieval-ranked files, packed paths, scan bytes,
+          confidence, adaptive rounds, and output budgets) alongside the final text. CLI evaluation
+          consumes those typed fields directly instead of parsing the compact `CTX` / `S` / `E`
+          representation, so output-format changes cannot silently redefine retrieval quality.
+          ''',
+          )
+
+          replace_once(
+              'docs/architecture.md',
+              '''Retrieval quality is evaluated together with context cost. The fixture suite and
+          self-hosted Sippion-repository suite measure Recall@5, MRR, unnecessary-file
+          ratio, latency, estimated tokens, relevant paths per 1,000 returned tokens, and
+          token savings versus a full searchable-source baseline. A change that reduces
+          output size but loses required evidence is therefore not considered an
+          optimization.
+          ''',
+              '''Retrieval quality is evaluated together with context cost. The fixture suite and
+          self-hosted Sippion-repository suite measure retrieval Recall@5/MRR separately from packed
+          expected-path recall, packed unnecessary-file ratio, latency, estimated tokens, and
+          relevant packed paths per 1,000 returned tokens. Token cost is compared with three
+          baselines: all searchable source, opening the top-ranked files in full, and deterministic
+          grep-style line windows. A change that reduces output size but loses required evidence is
+          therefore not considered an optimization.
+          ''',
+          )
+
+          replace_once(
+              'eval/cases.json',
+              '''  "minExpectedPathRecallAt5": 1.0,
+          ''',
+              '''  "minExpectedPathRecallAt5": 1.0,
+            "minPackedExpectedPathRecall": 1.0,
+          ''',
+          )
+
+          replace_once(
+              'eval/self_cases.json',
+              '''  "minExpectedPathRecallAt5": 1.0,
+          ''',
+              '''  "minExpectedPathRecallAt5": 1.0,
+            "minPackedExpectedPathRecall": 1.0,
+          ''',
+          )
+          PY
+
+          cargo fmt
+          python3 -m py_compile scripts/retrieval-eval.py scripts/token-calibration.py
+
+      - name: Commit follow-up changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/main.rs src/repo/map.rs README.md README.ja.md CHANGELOG.md docs/architecture.md eval/cases.json eval/self_cases.json
+          git diff --cached --check
+          git commit -m "Harden context ranking and evaluation architecture"
+          git push origin HEAD:feature/context-efficiency-overhaul
