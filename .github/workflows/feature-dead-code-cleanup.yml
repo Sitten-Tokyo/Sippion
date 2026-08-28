@@ -1,0 +1,78 @@
+name: Feature dead-code cleanup
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          persist-credentials: true
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt
+
+      - name: Mark legacy helpers test-only and format
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "src/core.rs": [
+                  ("\nfn escaped_path(path: &str) -> String {", "\n#[cfg(test)]\nfn escaped_path(path: &str) -> String {"),
+                  ("\nfn excerpt_header(excerpt: &RenderExcerpt) -> String {", "\n#[cfg(test)]\nfn excerpt_header(excerpt: &RenderExcerpt) -> String {"),
+                  ("\nfn serialize_excerpt(excerpt: &RenderExcerpt) -> String {", "\n#[cfg(test)]\nfn serialize_excerpt(excerpt: &RenderExcerpt) -> String {"),
+                  ("\nfn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -> Option<String> {", "\n#[cfg(test)]\nfn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -> Option<String> {"),
+                  ("\n#[must_use]\npub fn render_excerpts", "\n#[cfg(test)]\n#[must_use]\npub fn render_excerpts"),
+              ],
+              "src/repo/map.rs": [
+                  ("\n    pub fn map_from_hits_since(", "\n    #[cfg(test)]\n    pub fn map_from_hits_since("),
+              ],
+              "src/repo/search.rs": [
+                  ("\n    pub fn search_coordinated_since(", "\n    #[cfg(test)]\n    pub fn search_coordinated_since("),
+              ],
+              "src/repo/ranking.rs": [
+                  ("\npub(super) fn search_confidence(", "\n#[cfg(test)]\npub(super) fn search_confidence("),
+              ],
+          }
+
+          changed = False
+          for name, edits in replacements.items():
+              path = Path(name)
+              text = path.read_text(encoding="utf-8")
+              for old, new in edits:
+                  if new in text:
+                      continue
+                  if old not in text:
+                      raise SystemExit(f"anchor not found: {name}: {old!r}")
+                  text = text.replace(old, new, 1)
+                  changed = True
+              path.write_text(text, encoding="utf-8")
+
+          if not changed:
+              print("No source changes needed.")
+          PY
+          cargo fmt
+          if git diff --quiet; then
+            echo "Already clean."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src
+          git commit -m "Mark legacy retrieval helpers test-only"
+          git push origin HEAD:feature/context-efficiency-overhaul
