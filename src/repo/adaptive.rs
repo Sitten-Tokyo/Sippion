@@ -29,10 +29,8 @@ fn exact_query_term_coverage(query: &NormalizedQuery, outcome: &SearchOutcome) -
     }
     let mut exact = HashSet::<String>::new();
     for hit in outcome.hits.iter().take(3) {
-        let folded = crate::core::unicode_search_fold(&format!(
-            "{} {}",
-            hit.relative_path, hit.excerpt
-        ));
+        let folded =
+            crate::core::unicode_search_fold(&format!("{} {}", hit.relative_path, hit.excerpt));
         let tokens = crate::core::split_search_tokens(&folded).collect::<HashSet<_>>();
         for term in &query.terms {
             if tokens.contains(term.as_str()) {
@@ -270,8 +268,14 @@ mod tests {
 
     #[test]
     fn confidence_rewards_rank_gap_coverage_and_specificity() {
-        assert!(efficiency_confidence(&make(&[100.0, 10.0], 10), 0.9) > efficiency_confidence(&make(&[40.0, 39.0], 3), 0.2));
-        assert!(efficiency_confidence(&make(&[60.0, 40.0], 8), 0.9) > efficiency_confidence(&make(&[60.0, 40.0], 8), 0.1));
+        assert!(
+            efficiency_confidence(&make(&[100.0, 10.0], 10), 0.9)
+                > efficiency_confidence(&make(&[40.0, 39.0], 3), 0.2)
+        );
+        assert!(
+            efficiency_confidence(&make(&[60.0, 40.0], 8), 0.9)
+                > efficiency_confidence(&make(&[60.0, 40.0], 8), 0.1)
+        );
     }
 
     #[test]

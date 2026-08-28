@@ -200,12 +200,24 @@ mod tests {
         }
         .normalize()
         .expect("query");
-        let result = service.context_result(&query, None, None).expect("context result");
+        let result = service
+            .context_result(&query, None, None)
+            .expect("context result");
         assert_eq!(
-            result.diagnostics.ranked_files.first().map(|entry| entry.path.as_str()),
+            result
+                .diagnostics
+                .ranked_files
+                .first()
+                .map(|entry| entry.path.as_str()),
             Some("auth.rs")
         );
-        assert!(result.diagnostics.packed_paths.iter().any(|path| path == "auth.rs"));
+        assert!(
+            result
+                .diagnostics
+                .packed_paths
+                .iter()
+                .any(|path| path == "auth.rs")
+        );
         assert_eq!(result.diagnostics.returned_bytes, result.model_text.len());
 
         drop(service);

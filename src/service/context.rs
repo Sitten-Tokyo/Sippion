@@ -346,7 +346,10 @@ mod tests {
         let packed = pack_context(&query(), &[], &excerpts, "", &coverage);
         assert!(packed.text.contains("src/auth.rs"));
         assert!(packed.text.len() <= 8 * 1024);
-        assert_eq!(packed.packed_paths.first().map(String::as_str), Some("src/auth.rs"));
+        assert_eq!(
+            packed.packed_paths.first().map(String::as_str),
+            Some("src/auth.rs")
+        );
     }
 
     #[test]

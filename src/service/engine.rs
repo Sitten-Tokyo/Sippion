@@ -129,13 +129,7 @@ impl RepositoryEngine {
             ""
         };
 
-        let packed = pack_context(
-            query,
-            &structure.entries,
-            &excerpts,
-            status,
-            &coverage,
-        );
+        let packed = pack_context(query, &structure.entries, &excerpts, status, &coverage);
         let model_text = packed.text;
         let diagnostics = ContextDiagnostics {
             returned_bytes: model_text.len(),
