@@ -24,17 +24,35 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Format and commit only when needed
+      - name: Apply compact schema patch and format
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/core.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '"description": "Single adaptive repository-context tool. Internally combines a RAM-only incremental lexical index, BM25, path/session-agent ranking, bounded shared Tree-sitter + source-only semantic analysis, a cached weighted structural graph, cross-agent diversity, deduplication, excerpt extraction, conservative compaction, and adaptive context packing.",'
+          new = '"description": "Find and pack small, relevant repository context for an AI coding task. Local, read-only, bounded, and token-aware.",'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("MCP description anchor not found")
+          text = text.replace(
+              '"RTK-style compression",\n                    "Repomix-style packing"',
+              '"conservative source compaction",\n                    "utility-per-token context packing"',
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
           cargo fmt
           if git diff --quiet; then
-            echo "Already formatted."
+            echo "Already patched and formatted."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src
-          git commit -m "Apply rustfmt to context efficiency overhaul"
+          git commit -m "Compact model-visible MCP context metadata"
           git push origin HEAD:feature/context-efficiency-overhaul
