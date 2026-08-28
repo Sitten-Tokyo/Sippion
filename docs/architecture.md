@@ -66,6 +66,12 @@ structural metadata merely because a fixed quota was reserved for it, while
 architecture-oriented queries can spend more of the same bounded budget on
 symbols and semantic links when those atoms provide better value per token.
 
+Retrieval ranking and model-visible packing are represented separately inside the service.
+`ContextResult` carries typed diagnostics (retrieval-ranked files, packed paths, scan bytes,
+confidence, adaptive rounds, and output budgets) alongside the final text. CLI evaluation
+consumes those typed fields directly instead of parsing the compact `CTX` / `S` / `E`
+representation, so output-format changes cannot silently redefine retrieval quality.
+
 ## Safety and cache boundaries
 
 Source reads, AST work, concurrency, scan size, result counts, semantic
@@ -89,11 +95,12 @@ command, or repository code during retrieval.
 ## Evaluation objective
 
 Retrieval quality is evaluated together with context cost. The fixture suite and
-self-hosted Sippion-repository suite measure Recall@5, MRR, unnecessary-file
-ratio, latency, estimated tokens, relevant paths per 1,000 returned tokens, and
-token savings versus a full searchable-source baseline. A change that reduces
-output size but loses required evidence is therefore not considered an
-optimization.
+self-hosted Sippion-repository suite measure retrieval Recall@5/MRR separately from packed
+expected-path recall, packed unnecessary-file ratio, latency, estimated tokens, and
+relevant packed paths per 1,000 returned tokens. Token cost is compared with three
+baselines: all searchable source, opening the top-ranked files in full, and deterministic
+grep-style line windows. A change that reduces output size but loses required evidence is
+therefore not considered an optimization.
 
 Provider-specific tokenizer calibration is intentionally separate from the hard
 byte guard. Maintainers can collect authoritative token counts for representative

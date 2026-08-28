@@ -2,6 +2,7 @@
   "minRecallAt5": 1.0,
   "minMrr": 0.8,
   "minExpectedPathRecallAt5": 1.0,
+  "minPackedExpectedPathRecall": 1.0,
   "maxAverageEstimatedTokens": 1800,
   "maxAverageUnnecessaryFileRatio": 0.9,
   "maxP95LatencyMs": 5000,

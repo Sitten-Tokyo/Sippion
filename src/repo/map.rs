@@ -43,6 +43,71 @@ fn normalized_path_module(path: &str) -> String {
         .to_string()
 }
 
+fn expansion_directory_distance(seed_path: &str, candidate_path: &str) -> usize {
+    let seed = seed_path.replace('\\', "/");
+    let candidate = candidate_path.replace('\\', "/");
+    let seed_dir = seed.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let candidate_dir = candidate.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let seed_parts = seed_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let candidate_parts = candidate_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let common = seed_parts
+        .iter()
+        .zip(&candidate_parts)
+        .take_while(|(left, right)| left == right)
+        .count();
+    seed_parts.len().saturating_sub(common) + candidate_parts.len().saturating_sub(common)
+}
+
+fn expansion_path_score(
+    seed_path: &str,
+    candidate_path: &str,
+    base: f64,
+    exact_module: bool,
+) -> f64 {
+    let distance = expansion_directory_distance(seed_path, candidate_path) as f64;
+    let proximity_bonus = 2.0 / (distance + 1.0);
+    let extension_bonus =
+        if Path::new(seed_path).extension() == Path::new(candidate_path).extension() {
+            1.0
+        } else {
+            0.0
+        };
+    let exact_module_bonus = if exact_module { 2.0 } else { 0.0 };
+    base + proximity_bonus + extension_bonus + exact_module_bonus
+}
+
+fn ranked_expansion_paths(
+    seed_path: &str,
+    paths: &[String],
+    base: f64,
+    exact_module: bool,
+    limit: usize,
+) -> Vec<(String, f64)> {
+    let mut ranked = paths
+        .iter()
+        .map(|path| {
+            (
+                path.clone(),
+                expansion_path_score(seed_path, path, base, exact_module),
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left_path, left_score), (right_path, right_score)| {
+        right_score
+            .partial_cmp(left_score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left_path.cmp(right_path))
+    });
+    ranked.truncate(limit);
+    ranked
+}
+
 fn ranked_symbols(
     query: &NormalizedQuery,
     safe: &str,
@@ -667,16 +732,14 @@ impl RepositoryAccess {
             .lock()
             .map_err(|_| RepositoryAccessError::Io)?;
         let mut by_stem = HashMap::<String, Vec<String>>::new();
-        let mut by_module = HashMap::<String, String>::new();
+        let mut by_module = HashMap::<String, Vec<String>>::new();
         for path in index.files.keys() {
             if existing.contains(path.as_str()) {
                 continue;
             }
             let module = normalized_path_module(path);
             if !module.is_empty() {
-                by_module
-                    .entry(module.clone())
-                    .or_insert_with(|| path.clone());
+                by_module.entry(module).or_default().push(path.clone());
             }
             if let Some(stem) = Path::new(path).file_stem().and_then(|value| value.to_str()) {
                 let stem = crate::core::unicode_search_fold(stem);
@@ -686,6 +749,14 @@ impl RepositoryAccess {
             }
         }
         drop(index);
+        for paths in by_stem.values_mut() {
+            paths.sort();
+            paths.dedup();
+        }
+        for paths in by_module.values_mut() {
+            paths.sort();
+            paths.dedup();
+        }
 
         let mut scores = HashMap::<String, f64>::new();
         for seed in seeds {
@@ -699,11 +770,16 @@ impl RepositoryAccess {
                 if module.is_empty() {
                     continue;
                 }
-                if let Some(path) = by_module.get(&module) {
-                    scores
-                        .entry(path.clone())
-                        .and_modify(|score| *score = score.max(seed.search_score * 0.08 + 9.0))
-                        .or_insert(seed.search_score * 0.08 + 9.0);
+                if let Some(paths) = by_module.get(&module) {
+                    let base = seed.search_score * 0.08 + 9.0;
+                    for (path, candidate_score) in
+                        ranked_expansion_paths(&seed.relative_path, paths, base, true, 4)
+                    {
+                        scores
+                            .entry(path)
+                            .and_modify(|score| *score = score.max(candidate_score))
+                            .or_insert(candidate_score);
+                    }
                 }
                 let segments = module
                     .split('/')
@@ -714,11 +790,13 @@ impl RepositoryAccess {
                         continue;
                     };
                     let base = 7.0 - distance as f64 * 1.5 + seed.search_score * 0.05;
-                    for path in paths.iter().take(4) {
+                    for (path, candidate_score) in
+                        ranked_expansion_paths(&seed.relative_path, paths, base, false, 4)
+                    {
                         scores
-                            .entry(path.clone())
-                            .and_modify(|score| *score = score.max(base))
-                            .or_insert(base);
+                            .entry(path)
+                            .and_modify(|score| *score = score.max(candidate_score))
+                            .or_insert(candidate_score);
                     }
                 }
             }
@@ -740,6 +818,24 @@ mod optimized_tests {
     use super::*;
     use crate::core::McpToolInput;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn deterministic_expansion_prefers_near_same_language_candidate() {
+        let paths = vec![
+            "tests/dependency.rs".to_string(),
+            "src/dependency.rs".to_string(),
+            "legacy/dependency.py".to_string(),
+        ];
+        let ranked = ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3);
+        assert_eq!(
+            ranked.first().map(|(path, _)| path.as_str()),
+            Some("src/dependency.rs")
+        );
+        assert_eq!(
+            ranked,
+            ranked_expansion_paths("src/main.rs", &paths, 7.0, false, 3)
+        );
+    }
 
     #[test]
     fn import_neighbor_can_enter_structure_without_lexical_query_match() {

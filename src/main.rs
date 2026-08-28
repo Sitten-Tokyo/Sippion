@@ -14,10 +14,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::{
-    MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES,
-    heuristic_v3_estimated_tokens,
-};
+use crate::core::{MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES};
 use crate::service::{
     LocalRepositoryService, MAX_CONFIGURED_SCAN_BYTES, MAX_SCAN_BYTES, MIN_CONFIGURED_SCAN_BYTES,
     RepositoryService,
@@ -258,71 +255,6 @@ fn run_mcp_command(args: &[OsString]) -> Result<(), String> {
     mcp::serve_stdio(service).map_err(|error| format!("stdio MCP failed: {error}"))
 }
 
-#[derive(Debug, serde::Serialize)]
-struct RankedFileDiagnostic {
-    path: String,
-    rank: f64,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct QueryDiagnostic {
-    returned_bytes: usize,
-    estimated_tokens: usize,
-    hard_budget_bytes: Option<usize>,
-    target_estimated_tokens: Option<usize>,
-    scanned_bytes: Option<usize>,
-    ranked_files: Vec<RankedFileDiagnostic>,
-}
-
-fn parse_numeric_field(line: &str, key: &str) -> Option<usize> {
-    line.split_whitespace().find_map(|part| {
-        part.strip_prefix(key)
-            .and_then(|value| value.parse::<usize>().ok())
-    })
-}
-
-fn query_diagnostic(context: &str) -> QueryDiagnostic {
-    let mut ranked_files = Vec::new();
-    let mut hard_budget_bytes = None;
-    let mut target_estimated_tokens = None;
-    let mut scanned_bytes = None;
-    for line in context.lines() {
-        if line.starts_with("CTX ") {
-            hard_budget_bytes = parse_numeric_field(line, "hard_b=");
-            target_estimated_tokens = parse_numeric_field(line, "target_t=");
-            scanned_bytes = parse_numeric_field(line, "scan_b=");
-        } else if let Some(rest) = line.strip_prefix("S path=") {
-            let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<String>();
-            let Some(Ok(path)) = stream.next() else {
-                continue;
-            };
-            let metadata = rest[stream.byte_offset()..].trim_start();
-            let Some(rank_text) = metadata
-                .strip_prefix("rank=")
-                .and_then(|value| value.split_whitespace().next())
-            else {
-                continue;
-            };
-            if let Ok(rank) = rank_text.parse::<f64>() {
-                ranked_files.push(RankedFileDiagnostic { path, rank });
-            }
-        }
-    }
-    ranked_files.sort_by(|left, right| {
-        right
-            .rank
-            .partial_cmp(&left.rank)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    QueryDiagnostic {
-        returned_bytes: context.len(),
-        estimated_tokens: heuristic_v3_estimated_tokens(context),
-        hard_budget_bytes,
-        target_estimated_tokens,
-        scanned_bytes,
-        ranked_files,
-    }
-}
 fn run_query_command(args: &[OsString]) -> Result<(), String> {
     let mut options = RepositoryOptions::default();
     let mut json_output = false;
@@ -396,10 +328,11 @@ fn run_query_command(args: &[OsString]) -> Result<(), String> {
         finalize_root(options).map_err(|error| format!("query {error}"))?;
     let service = LocalRepositoryService::open_with_scan_budget(root, scan_budget_bytes)
         .map_err(|_| "cannot secure project root".to_string())?;
-    let context = service
-        .context(&normalized, Some(&coordination), None)
+    let result = service
+        .context_result(&normalized, Some(&coordination), None)
         .map_err(|error| error.user_message().to_string())?;
-    let diagnostic = query_diagnostic(&context);
+    let context = result.model_text;
+    let diagnostic = result.diagnostics;
 
     if json_output {
         let value = serde_json::json!({
@@ -418,15 +351,9 @@ fn run_query_command(args: &[OsString]) -> Result<(), String> {
             "Sippion query diagnostics: bytes={} estimated_tokens={} hard_budget_bytes={} target_estimated_tokens={} scanned_bytes={} ranked_files={}",
             diagnostic.returned_bytes,
             diagnostic.estimated_tokens,
-            diagnostic
-                .hard_budget_bytes
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-            diagnostic
-                .target_estimated_tokens
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-            diagnostic
-                .scanned_bytes
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+            diagnostic.hard_budget_bytes,
+            diagnostic.target_estimated_tokens,
+            diagnostic.scanned_bytes,
             diagnostic
                 .ranked_files
                 .iter()
