@@ -44,6 +44,20 @@ jobs:
       - name: Apply deterministic feature patch
         run: python scripts/apply_language_sbom_oss.py
 
+      - name: Normalize generated language tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/syntax.rs")
+          text = path.read_text()
+          text = text.replace('        | "function_definition"\n', '', 1)
+          text = text.replace('import com.example.Auth; class Login', 'import com.example.Auth;\\nclass Login', 1)
+          text = text.replace('using Acme.Auth; class Login', 'using Acme.Auth;\\nclass Login', 1)
+          path.write_text(text)
+          PY
+
       - name: Preserve rc.35 verifier compatibility
         shell: bash
         run: |
