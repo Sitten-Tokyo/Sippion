@@ -5,6 +5,8 @@
   "repositories": [
     {
       "name": "serde-json",
+      "language": "rust",
+      "scale": "medium",
       "url": "https://github.com/serde-rs/json.git",
       "commit": "afdf6fc67247dd7fa4fcde1381e6ecc6bcc7a30e",
       "cases": [
@@ -18,6 +20,8 @@
     },
     {
       "name": "flask",
+      "language": "python",
+      "scale": "medium",
       "url": "https://github.com/pallets/flask.git",
       "commit": "d318b683471101618febed18996405ad26462110",
       "cases": [
@@ -31,6 +35,8 @@
     },
     {
       "name": "express",
+      "language": "javascript",
+      "scale": "medium",
       "url": "https://github.com/expressjs/express.git",
       "commit": "023767fe9872e029271df1418f73401bff20ff40",
       "cases": [
@@ -43,7 +49,24 @@
       ]
     },
     {
+      "name": "typescript",
+      "language": "typescript",
+      "scale": "large",
+      "url": "https://github.com/microsoft/TypeScript.git",
+      "commit": "9a8581c393a38961489cc8409ae4dfbe97fc25ec",
+      "cases": [
+        {
+          "name": "typescript-source-file-cache",
+          "query": "SourceFileCache snapshot project",
+          "expectedPaths": ["packages/typescript/src/api/sourceFileCache.ts"],
+          "requiredAnchors": ["export class SourceFileCache"]
+        }
+      ]
+    },
+    {
       "name": "cobra",
+      "language": "go",
+      "scale": "medium",
       "url": "https://github.com/spf13/cobra.git",
       "commit": "adbc8813901bba65827259daa8e22ff94ec1f30e",
       "cases": [
@@ -52,6 +75,66 @@
           "query": "Command application flags",
           "expectedPaths": ["command.go"],
           "requiredAnchors": ["type Command struct"]
+        }
+      ]
+    },
+    {
+      "name": "spring-petclinic",
+      "language": "java",
+      "scale": "medium",
+      "url": "https://github.com/spring-projects/spring-petclinic.git",
+      "commit": "818c4136ea971c21674525f9053de0d9c7ad8cfe",
+      "cases": [
+        {
+          "name": "java-owner-controller",
+          "query": "OwnerController OwnerRepository owner",
+          "expectedPaths": ["src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java"],
+          "requiredAnchors": ["class OwnerController"]
+        }
+      ]
+    },
+    {
+      "name": "system-command-line",
+      "language": "csharp",
+      "scale": "medium",
+      "url": "https://github.com/dotnet/command-line-api.git",
+      "commit": "1f13873cf84d5547d1b8d4f9d68dcb06b3ea0a69",
+      "cases": [
+        {
+          "name": "csharp-command-symbol",
+          "query": "Command Symbol Subcommands",
+          "expectedPaths": ["src/System.CommandLine/Command.cs"],
+          "requiredAnchors": ["public class Command"]
+        }
+      ]
+    },
+    {
+      "name": "libgit2",
+      "language": "c",
+      "scale": "large",
+      "url": "https://github.com/libgit2/libgit2.git",
+      "commit": "0551dfd4ad989b6a3d5683c0d4cf326c6efef929",
+      "cases": [
+        {
+          "name": "c-zstream-output",
+          "query": "git_zstream_get_output zstream output",
+          "expectedPaths": ["src/util/zstream.c"],
+          "requiredAnchors": ["int git_zstream_get_output"]
+        }
+      ]
+    },
+    {
+      "name": "fmt",
+      "language": "cpp",
+      "scale": "large",
+      "url": "https://github.com/fmtlib/fmt.git",
+      "commit": "e589a16ecbebcc330a68e7a2223451b469e0c82d",
+      "cases": [
+        {
+          "name": "cpp-enum-identifier-map",
+          "query": "identifier_map_size identifier_slot enum",
+          "expectedPaths": ["include/fmt/enum.h"],
+          "requiredAnchors": ["identifier_map_size"]
         }
       ]
     }
