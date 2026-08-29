@@ -3,11 +3,11 @@ name: Fuzz
 on:
   pull_request:
     paths:
-      - 'src/core.rs'
-      - 'src/lib.rs'
+      - 'src/**'
       - 'fuzz/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'eval/fixture/**'
       - '.github/workflows/fuzz.yml'
   workflow_dispatch:
   schedule:
@@ -21,9 +21,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  query-normalization:
+  boundaries:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,13 +36,41 @@ jobs:
       - name: Install pinned cargo-fuzz
         run: cargo +nightly-2026-08-29 install cargo-fuzz --version 0.13.2 --locked
 
-      - name: Build fuzz target
-        run: cargo +nightly-2026-08-29 fuzz build query_normalize
+      - name: Build production binary for black-box fuzzing
+        run: cargo build --release --locked
 
-      - name: Fuzz query normalization on pull requests
+      - name: Build all fuzz targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in query_normalize redaction root_scope mcp_stdio source_parser; do
+            cargo +nightly-2026-08-29 fuzz build "$target"
+          done
+
+      - name: Fuzz boundaries on pull requests
         if: github.event_name == 'pull_request'
-        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=30 -timeout=10
+        env:
+          SIPPION_FUZZ_BIN: ${{ github.workspace }}/target/release/sippion
+          SIPPION_FUZZ_ROOT: ${{ github.workspace }}/eval/fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=20 -timeout=10
+          cargo +nightly-2026-08-29 fuzz run redaction -- -max_total_time=20 -timeout=10
+          cargo +nightly-2026-08-29 fuzz run root_scope -- -max_total_time=15 -timeout=10
+          cargo +nightly-2026-08-29 fuzz run mcp_stdio -- -max_total_time=10 -timeout=10
+          cargo +nightly-2026-08-29 fuzz run source_parser -- -max_total_time=10 -timeout=10
 
-      - name: Fuzz query normalization on schedule or demand
+      - name: Fuzz boundaries on schedule or demand
         if: github.event_name != 'pull_request'
-        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=180 -timeout=10
+        env:
+          SIPPION_FUZZ_BIN: ${{ github.workspace }}/target/release/sippion
+          SIPPION_FUZZ_ROOT: ${{ github.workspace }}/eval/fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in query_normalize redaction root_scope; do
+            cargo +nightly-2026-08-29 fuzz run "$target" -- -max_total_time=180 -timeout=10
+          done
+          cargo +nightly-2026-08-29 fuzz run mcp_stdio -- -max_total_time=120 -timeout=10
+          cargo +nightly-2026-08-29 fuzz run source_parser -- -max_total_time=120 -timeout=10
