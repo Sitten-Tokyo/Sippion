@@ -101,3 +101,26 @@ text = one(
     'bounded late-definition fallback',
 )
 map_path.write_text(text, encoding='utf-8')
+
+# Keep the oversize-redaction marker with the module that owns and emits it. The parent still
+# imports it through `use redaction::*`, so existing repo-level tests retain access without making
+# the frozen evaluation assert an implementation symbol against the wrong source file.
+repo_path = Path('src/repo.rs')
+repo = repo_path.read_text(encoding='utf-8')
+repo = one(
+    repo,
+    'const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";\n',
+    '',
+    'move oversize redaction marker from parent',
+)
+repo_path.write_text(repo, encoding='utf-8')
+
+redaction_path = Path('src/repo/redaction.rs')
+redaction = redaction_path.read_text(encoding='utf-8')
+redaction = one(
+    redaction,
+    'use super::*;\n',
+    'use super::*;\n\npub(super) const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";\n',
+    'own oversize redaction marker in redaction module',
+)
+redaction_path.write_text(redaction, encoding='utf-8')
