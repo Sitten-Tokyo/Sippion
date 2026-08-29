@@ -139,7 +139,10 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         // that owns two or more natural-language query concepts stronger than surrounding prose.
         // This is definition-only; ordinary compound references retain the weaker bonus below.
         let coverage_bonus = if identifier_matches >= 2 {
-            18.0 + identifier_matches as f64 * 6.0
+            // A definition whose identifier owns several query concepts is a strong, local
+            // implementation answer even when repository-wide prose repeats those words more
+            // often. Keep the bonus bounded and apply it only to declaration ownership.
+            42.0 + identifier_matches as f64 * 8.0
         } else {
             10.0
         };
@@ -150,7 +153,7 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         } else {
             coverage_bonus
         }
-        .min(36.0);
+        .min(72.0);
     }
 
     // A compound identifier reference is weaker than its definition, but stronger than prose
