@@ -98,7 +98,8 @@ def main():
     queries = [case["query"] for case in cases]
     fixture = str(Path(args.fixture).resolve())
 
-    # Interleave whole suites rather than benchmarking one binary after a long idle gap.
+    # Both binaries run on the same hosted runner and committed fixture. Relative thresholds also
+    # include absolute allowances to tolerate normal runner jitter between the two complete suites.
     baseline = measure(str(Path(args.baseline).resolve()), fixture, queries, args.repetitions)
     candidate = measure(str(Path(args.candidate).resolve()), fixture, queries, args.repetitions)
 
