@@ -35,7 +35,9 @@ jobs:
           echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
 
       - name: Validate workflow syntax and expressions
-        run: actionlint
+        # Installer shell code has its own dedicated ShellCheck/PSScriptAnalyzer gate. Disable
+        # actionlint's optional embedded-shell pass here so this job owns workflow syntax only.
+        run: actionlint -shellcheck=
 
       - name: Install checksum-pinned zizmor 1.29.0
         shell: bash
