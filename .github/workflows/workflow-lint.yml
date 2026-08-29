@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - '.github/workflows/**'
+      - 'zizmor.yml'
   push:
     paths:
       - '.github/workflows/**'
+      - 'zizmor.yml'
   workflow_dispatch:
 
 permissions:
@@ -53,4 +55,4 @@ jobs:
           echo "$RUNNER_TEMP/zizmor" >> "$GITHUB_PATH"
 
       - name: Audit workflow security posture
-        run: zizmor .github/workflows
+        run: zizmor --config zizmor.yml .github/workflows
