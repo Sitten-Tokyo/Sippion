@@ -7,6 +7,7 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 ### Changed
 
 - Repository context packing now explicitly optimizes utility per estimated model-input token, discounts redundant same-file atoms, and exposes typed retrieval/packing diagnostics without reparsing model-visible text.
+- Context packing now reserves one query-relevant definition/signature structure atom within the existing token and atom budgets, preventing high-value symbol ownership from being displaced by prose-heavy context.
 - Model-visible source evidence is line-framed as untrusted data so repository text cannot masquerade as top-level compact `CTX`, `S`, or `E` records.
 - The Rust runtime now exposes the canonical `heuristic-v3` token estimator through `sippion estimate-tokens`; retrieval evaluation and tokenizer calibration call that implementation instead of duplicating the formula in Python.
 - Adaptive retrieval confidence now uses exact evidence plus RAM-index document-frequency rarity instead of treating shorter queries as inherently more specific.
