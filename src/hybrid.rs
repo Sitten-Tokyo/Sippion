@@ -187,6 +187,12 @@ fn identifier_after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
     (!value.is_empty()).then_some(value)
 }
 
+fn strip_rust_restricted_visibility(line: &str) -> &str {
+    line.strip_prefix("pub(")
+        .and_then(|rest| rest.split_once(") ").map(|(_, declaration)| declaration))
+        .unwrap_or(line)
+}
+
 #[must_use]
 pub fn extract_symbols(text: &str, max_symbols: usize) -> Vec<Symbol> {
     let markers: &[(&str, &str)] = &[
@@ -225,8 +231,9 @@ pub fn extract_symbols(text: &str, max_symbols: usize) -> Vec<Symbol> {
     let mut seen = HashSet::new();
     for (index, raw) in text.lines().enumerate() {
         let trimmed = raw.trim_start();
+        let declaration = strip_rust_restricted_visibility(trimmed);
         for &(marker, kind) in markers {
-            if let Some(name) = identifier_after(trimmed, marker) {
+            if let Some(name) = identifier_after(declaration, marker) {
                 if seen.insert(name.to_string()) {
                     let signature = trimmed.chars().take(220).collect::<String>();
                     symbols.push(Symbol {
@@ -244,6 +251,66 @@ pub fn extract_symbols(text: &str, max_symbols: usize) -> Vec<Symbol> {
         }
     }
     symbols
+}
+
+fn symbol_identifier_fragments(identifier: &str) -> Vec<String> {
+    let mut fragments = Vec::new();
+    for coarse in identifier.split(['_', '-']) {
+        let chars = coarse.chars().collect::<Vec<_>>();
+        if chars.len() < 2 {
+            continue;
+        }
+        let mut start = 0;
+        for index in 1..chars.len() {
+            let previous = chars[index - 1];
+            let current = chars[index];
+            let next = chars.get(index + 1).copied();
+            let camel_boundary = current.is_uppercase()
+                && (previous.is_lowercase()
+                    || previous.is_ascii_digit()
+                    || (previous.is_uppercase() && next.is_some_and(char::is_lowercase)));
+            if camel_boundary {
+                let fragment = chars[start..index].iter().collect::<String>();
+                if fragment.chars().count() >= 2 {
+                    fragments.push(crate::core::unicode_search_fold(&fragment));
+                }
+                start = index;
+            }
+        }
+        let fragment = chars[start..].iter().collect::<String>();
+        if fragment.chars().count() >= 2 {
+            fragments.push(crate::core::unicode_search_fold(&fragment));
+        }
+    }
+    fragments
+}
+
+fn symbol_fragment_matches_term(fragment: &str, term: &str) -> bool {
+    fragment == term
+        || fragment
+            .strip_suffix('s')
+            .is_some_and(|singular| singular == term)
+        || term
+            .strip_suffix('s')
+            .is_some_and(|singular| singular == fragment)
+}
+
+pub(crate) fn symbol_term_match_score(name: &str, signature: &str, term: &str) -> usize {
+    let folded_name = crate::core::unicode_search_fold(name);
+    if folded_name == term {
+        8
+    } else if symbol_identifier_fragments(name)
+        .iter()
+        .any(|fragment| symbol_fragment_matches_term(fragment, term))
+    {
+        6
+    } else if folded_name.contains(term) {
+        2
+    } else if crate::core::unicode_search_fold(signature).contains(term) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Weighted PageRank for semantic repository edges. Lexical coincidences can remain weak while
@@ -342,6 +409,27 @@ mod tests {
                 &natural
             ) > structural_line_bonus("validate_session_token(token)", &natural)
         );
+    }
+
+    #[test]
+    fn fallback_symbol_extraction_handles_restricted_rust_visibility() {
+        let symbols = extract_symbols(
+            "pub(super) fn pack_context() {}\npub(crate) struct RepositoryEngine {}\npub(in crate::repo) const TOKEN_LIMIT: usize = 1;\n",
+            8,
+        );
+        assert!(symbols.iter().any(|symbol| symbol.name == "pack_context"));
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "RepositoryEngine")
+        );
+        assert!(symbols.iter().any(|symbol| symbol.name == "TOKEN_LIMIT"));
+    }
+
+    #[test]
+    fn symbol_matching_handles_plural_identifier_fragments() {
+        assert_eq!(symbol_term_match_score("PROJECT_MARKERS", "", "project"), 6);
+        assert_eq!(symbol_term_match_score("PROJECT_MARKERS", "", "marker"), 6);
     }
 
     #[test]

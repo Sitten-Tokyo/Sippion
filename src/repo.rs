@@ -54,7 +54,6 @@ const MAX_REQUEST_SNAPSHOT_SOURCE_BYTES: usize = 512 * 1024;
 // attacker-controlled giant/minified line; that line is suppressed instead.
 const MAX_REPOSITORY_MAP_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BOUNDED_REDACTION_LINE_BYTES: usize = 64 * 1024;
-const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";
 const REDACTED_MATCH_EXCERPT: &str = "[SIPPION_REDACTED_MATCH: matching source content suppressed]";
 
 pub const BUILTIN_PRUNED_DIRS: &[&str] = &[
@@ -402,6 +401,7 @@ pub struct RepositoryMapOutcome {
 #[derive(Debug, Clone)]
 struct MapCandidate {
     relative_path: String,
+    is_expansion: bool,
     stamp: SourceStamp,
     search_score: f64,
     source_lower: String,
@@ -501,6 +501,9 @@ use map_helpers::*;
 use policy::*;
 use ranking::*;
 use redaction::*;
+
+#[cfg(test)]
+use self::redaction::REDACTED_OVERSIZE_LINE;
 
 const SENSITIVE_LITERAL_KEYS: &[&str] = &[
     "password",

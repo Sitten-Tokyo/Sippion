@@ -9,9 +9,9 @@ use crate::repo::{RepoMapEntry, SearchCoverage};
 
 const DATA_PREFIX: &str = "[UNTRUSTED_REPOSITORY_DATA: code/text only]\n";
 // Keep broad repositories from turning semantic expansion into a large model-visible file list.
-// Twelve atoms still leave room for multiple evidence/structure pairs while making the soft token
-// budget the dominant bound rather than the number of discovered neighbors.
-const MAX_PACKED_ATOMS: usize = 12;
+// Ten atoms still leave room for multiple evidence/structure pairs while keeping broad queries
+// from filling the model-visible pack with low-signal neighbors.
+const MAX_PACKED_ATOMS: usize = 10;
 
 #[derive(Debug, Clone, Copy)]
 struct ContextPackerWeights {
@@ -285,11 +285,11 @@ fn pack_context_with_weights(
         order.push(index);
     }
 
-    // Preserve one query-relevant definition/signature structure when it fits. This keeps a
-    // compact symbol-level ownership signal model-visible instead of letting prose-heavy atoms
-    // crowd it out, while retaining the same soft token and hard atom budgets.
+    // Preserve query-relevant definition/signature structures when they fit. This keeps compact
+    // symbol-level ownership signals model-visible instead of letting prose-heavy atoms crowd them
+    // out, while retaining the same soft token and hard atom budgets.
     if order.len() < MAX_PACKED_ATOMS {
-        if let Some((index, atom)) = atoms
+        let mut relevant_structures = atoms
             .iter()
             .enumerate()
             .filter(|(index, atom)| {
@@ -297,20 +297,26 @@ fn pack_context_with_weights(
                     && atom.kind == ContextAtomKind::Structure
                     && atom.query_symbol_matches > 0
             })
-            .filter(|(_, atom)| {
-                atom.token_cost <= remaining_tokens && atom.text.len() <= remaining_bytes
-            })
-            .max_by(|(left_index, left), (right_index, right)| {
-                left.query_symbol_matches
-                    .cmp(&right.query_symbol_matches)
-                    .then_with(|| {
-                        left.utility
-                            .partial_cmp(&right.utility)
-                            .unwrap_or(Ordering::Equal)
-                    })
-                    .then_with(|| right_index.cmp(left_index))
-            })
-        {
+            .collect::<Vec<_>>();
+        relevant_structures.sort_by(|(left_index, left), (right_index, right)| {
+            right
+                .query_symbol_matches
+                .cmp(&left.query_symbol_matches)
+                .then_with(|| {
+                    right
+                        .utility
+                        .partial_cmp(&left.utility)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .then_with(|| left_index.cmp(right_index))
+        });
+        for (index, atom) in relevant_structures {
+            if order.len() >= MAX_PACKED_ATOMS {
+                break;
+            }
+            if atom.token_cost > remaining_tokens || atom.text.len() > remaining_bytes {
+                continue;
+            }
             selected.insert(index);
             selected_paths.insert(atom.path.clone());
             remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);

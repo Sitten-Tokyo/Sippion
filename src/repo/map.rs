@@ -245,26 +245,17 @@ fn ranked_symbols(
         .collect::<Vec<_>>();
     symbols.sort_by(|a, b| {
         let score = |symbol: &RepoMapSymbol| {
-            let name = crate::core::unicode_search_fold(&symbol.name);
-            let signature = crate::core::unicode_search_fold(&symbol.signature);
             query
                 .terms
                 .iter()
                 .map(|term| {
-                    if name.as_str() == term.as_str() {
-                        6usize
-                    } else if name.contains(term.as_str()) {
-                        4usize
-                    } else if signature.contains(term.as_str()) {
-                        2usize
-                    } else {
-                        0usize
-                    }
+                    crate::hybrid::symbol_term_match_score(&symbol.name, &symbol.signature, term)
                 })
                 .sum::<usize>()
         };
         score(b)
             .cmp(&score(a))
+            .then_with(|| a.name.len().cmp(&b.name.len()))
             .then_with(|| a.line.cmp(&b.line))
             .then_with(|| a.name.cmp(&b.name))
     });
@@ -443,7 +434,7 @@ impl RepositoryAccess {
                 continue;
             }
 
-            let Some(built) = self.build_map_candidate(
+            let Some(mut built) = self.build_map_candidate(
                 query,
                 &hit.relative_path,
                 source,
@@ -456,6 +447,7 @@ impl RepositoryAccess {
                 structural_collection_enabled = false;
                 continue;
             };
+            built.candidate.is_expansion = false;
             truncated |= built.redaction_truncated;
             map_redacted_bytes = map_redacted_bytes.saturating_add(built.redacted_bytes);
             map_folded_bytes = map_folded_bytes.saturating_add(built.folded_bytes);
@@ -495,7 +487,7 @@ impl RepositoryAccess {
                     truncated = true;
                     break;
                 }
-                let Some(built) = self.build_map_candidate(
+                let Some(mut built) = self.build_map_candidate(
                     query,
                     &path,
                     source,
@@ -507,6 +499,7 @@ impl RepositoryAccess {
                     truncated = true;
                     continue;
                 };
+                built.candidate.is_expansion = true;
                 truncated |= built.redaction_truncated;
                 map_redacted_bytes = map_redacted_bytes.saturating_add(built.redacted_bytes);
                 map_folded_bytes = map_folded_bytes.saturating_add(built.folded_bytes);
@@ -698,6 +691,7 @@ impl RepositoryAccess {
             .into_iter()
             .enumerate()
             .map(|(index, candidate)| {
+                let is_expansion = candidate.is_expansion;
                 let mut semantic_links = edge_maps[index]
                     .iter()
                     .filter_map(|(target, (weight, kind))| {
@@ -719,24 +713,36 @@ impl RepositoryAccess {
                     .iter()
                     .map(|link| link.relative_path.clone())
                     .collect();
-                RepoMapEntry {
-                    relative_path: candidate.relative_path,
-                    score: candidate.search_score
-                        + candidate.semantic_query_bonus * 3.0
-                        + centrality.get(index).copied().unwrap_or(0.0) * 50.0,
-                    symbols: candidate.symbols,
-                    links_to,
-                    semantic_links,
-                }
+                (
+                    is_expansion,
+                    RepoMapEntry {
+                        relative_path: candidate.relative_path,
+                        score: candidate.search_score
+                            + candidate.semantic_query_bonus * 3.0
+                            + centrality.get(index).copied().unwrap_or(0.0) * 50.0,
+                        symbols: candidate.symbols,
+                        links_to,
+                        semantic_links,
+                    },
+                )
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| a.relative_path.cmp(&b.relative_path))
+        entries.sort_by(|(left_expansion, left), (right_expansion, right)| {
+            left_expansion
+                .cmp(right_expansion)
+                .then_with(|| {
+                    right
+                        .score
+                        .partial_cmp(&left.score)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
         });
         entries.truncate(max_files.min(16));
+        let entries = entries
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>();
         invalidated_evidence_paths.sort();
         invalidated_evidence_paths.dedup();
         Ok(RepositoryMapOutcome {
@@ -828,6 +834,7 @@ impl RepositoryAccess {
         Ok(Some(BuiltMapCandidate {
             candidate: MapCandidate {
                 relative_path: path.to_string(),
+                is_expansion: false,
                 stamp: source.stamp,
                 search_score,
                 source_lower,

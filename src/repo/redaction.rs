@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";
+
 /// Defense in depth only. Path denial is the primary policy. Inline redaction is deliberately
 /// limited to high-confidence credential forms so ordinary auth code is not destroyed.
 #[must_use]
