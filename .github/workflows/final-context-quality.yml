@@ -31,7 +31,7 @@ jobs:
           repo_path = Path('src/repo.rs')
           repo = repo_path.read_text(encoding='utf-8')
           old_parent = 'const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";\n'
-          parent_import = 'use self::redaction::REDACTED_OVERSIZE_LINE;\n'
+          parent_import = '#[cfg(test)]\nuse self::redaction::REDACTED_OVERSIZE_LINE;\n'
           if old_parent in repo:
               repo = repo.replace(old_parent, parent_import, 1)
           elif parent_import not in repo:
