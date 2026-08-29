@@ -57,13 +57,18 @@ struct ContextAtom {
     text: String,
     utility: f64,
     token_cost: usize,
+    query_symbol_matches: usize,
 }
 
 fn escaped(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid>\"".to_string())
 }
 
-fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> ContextAtom {
+fn structure_atom(
+    query: &NormalizedQuery,
+    entry: &RepoMapEntry,
+    weights: ContextPackerWeights,
+) -> ContextAtom {
     let links = entry
         .semantic_links
         .iter()
@@ -81,6 +86,7 @@ fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> Contex
         text.push_str(&links);
     }
     text.push('\n');
+    let mut visible_symbol_text = String::new();
     for symbol in entry.symbols.iter().take(3) {
         text.push_str(&format!(
             "  {} {}:{} {}\n",
@@ -89,7 +95,17 @@ fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> Contex
             symbol.line,
             escaped(symbol.signature.trim())
         ));
+        visible_symbol_text.push_str(&symbol.name);
+        visible_symbol_text.push(' ');
+        visible_symbol_text.push_str(&symbol.signature);
+        visible_symbol_text.push(' ');
     }
+    let folded_symbols = crate::core::unicode_search_fold(&visible_symbol_text);
+    let query_symbol_matches = query
+        .terms
+        .iter()
+        .filter(|term| folded_symbols.contains(term.as_str()))
+        .count();
     let semantic_bonus =
         entry.semantic_links.len().min(4) as f64 * weights.structure_semantic_bonus;
     let symbol_bonus = entry.symbols.len().min(4) as f64 * weights.structure_symbol_bonus;
@@ -103,6 +119,7 @@ fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> Contex
         token_cost: heuristic_v3_estimated_tokens(&text).max(1),
         text,
         utility,
+        query_symbol_matches,
     }
 }
 
@@ -159,6 +176,7 @@ fn evidence_atom(
         token_cost: heuristic_v3_estimated_tokens(&text).max(1),
         text,
         utility,
+        query_symbol_matches: 0,
     }
 }
 
@@ -229,7 +247,11 @@ fn pack_context_with_weights(
         .saturating_sub(header.len().saturating_add(suffix.len()));
 
     let mut atoms = Vec::with_capacity(entries.len().saturating_add(excerpts.len()));
-    atoms.extend(entries.iter().map(|entry| structure_atom(entry, weights)));
+    atoms.extend(
+        entries
+            .iter()
+            .map(|entry| structure_atom(query, entry, weights)),
+    );
     atoms.extend(
         excerpts
             .iter()
@@ -261,6 +283,40 @@ fn pack_context_with_weights(
         remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);
         remaining_bytes = remaining_bytes.saturating_sub(atom.text.len());
         order.push(index);
+    }
+
+    // Preserve one query-relevant definition/signature structure when it fits. This keeps a
+    // compact symbol-level ownership signal model-visible instead of letting prose-heavy atoms
+    // crowd it out, while retaining the same soft token and hard atom budgets.
+    if order.len() < MAX_PACKED_ATOMS {
+        if let Some((index, atom)) = atoms
+            .iter()
+            .enumerate()
+            .filter(|(index, atom)| {
+                !selected.contains(index)
+                    && atom.kind == ContextAtomKind::Structure
+                    && atom.query_symbol_matches > 0
+            })
+            .filter(|(_, atom)| {
+                atom.token_cost <= remaining_tokens && atom.text.len() <= remaining_bytes
+            })
+            .max_by(|(left_index, left), (right_index, right)| {
+                left.query_symbol_matches
+                    .cmp(&right.query_symbol_matches)
+                    .then_with(|| {
+                        left.utility
+                            .partial_cmp(&right.utility)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .then_with(|| right_index.cmp(left_index))
+            })
+        {
+            selected.insert(index);
+            selected_paths.insert(atom.path.clone());
+            remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);
+            remaining_bytes = remaining_bytes.saturating_sub(atom.text.len());
+            order.push(index);
+        }
     }
 
     while order.len() < MAX_PACKED_ATOMS {
@@ -445,6 +501,50 @@ mod tests {
     }
 
     #[test]
+    fn packer_reserves_query_relevant_structure_symbol() {
+        let mut entries = (0..12)
+            .map(|index| RepoMapEntry {
+                relative_path: format!("src/noise_{index}.rs"),
+                score: 1_000.0 - index as f64,
+                symbols: vec![RepoMapSymbol {
+                    name: format!("unrelated_{index}"),
+                    kind: "function".into(),
+                    line: 1,
+                    signature: format!("fn unrelated_{index}()"),
+                }],
+                links_to: Vec::new(),
+                semantic_links: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        entries.push(RepoMapEntry {
+            relative_path: "src/auth_definition.rs".into(),
+            score: 0.1,
+            symbols: vec![RepoMapSymbol {
+                name: "authentication_token".into(),
+                kind: "function".into(),
+                line: 7,
+                signature: "fn authentication_token()".into(),
+            }],
+            links_to: Vec::new(),
+            semantic_links: Vec::new(),
+        });
+        let coverage = SearchCoverage {
+            discovery_complete: true,
+            eligible_files: entries.len(),
+            indexed_files: entries.len(),
+            confidence_milli: 900,
+            ..SearchCoverage::default()
+        };
+        let packed = pack_context(&query(), &entries, &[], "", &coverage);
+        assert!(packed.text.contains("authentication_token"));
+        assert!(
+            packed
+                .packed_paths
+                .contains(&"src/auth_definition.rs".to_string())
+        );
+    }
+
+    #[test]
     fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {
         let atoms = vec![
             ContextAtom {
@@ -453,6 +553,7 @@ mod tests {
                 text: "auth".into(),
                 utility: 10.0,
                 token_cost: 10,
+                query_symbol_matches: 0,
             },
             ContextAtom {
                 kind: ContextAtomKind::Structure,
@@ -460,6 +561,7 @@ mod tests {
                 text: "session".into(),
                 utility: 6.0,
                 token_cost: 10,
+                query_symbol_matches: 0,
             },
         ];
         let selected = HashSet::new();

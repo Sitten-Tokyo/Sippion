@@ -135,7 +135,14 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         if identifier_matches == 0 {
             return 6.0;
         }
-        let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;
+        // Keep the established single-symbol ownership score, but make a compound definition
+        // that owns two or more natural-language query concepts stronger than surrounding prose.
+        // This is definition-only; ordinary compound references retain the weaker bonus below.
+        let coverage_bonus = if identifier_matches >= 2 {
+            18.0 + identifier_matches as f64 * 6.0
+        } else {
+            10.0
+        };
         // Exact symbol queries keep the established ownership floor. Natural-language queries
         // gain additional credit when several query concepts are owned by one identifier.
         return if identifier_matches == terms.len() {
@@ -143,7 +150,7 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         } else {
             coverage_bonus
         }
-        .min(22.0);
+        .min(36.0);
     }
 
     // A compound identifier reference is weaker than its definition, but stronger than prose
@@ -340,27 +347,27 @@ mod tests {
     #[test]
     fn natural_query_rewards_partial_identifier_ownership_and_references() {
         let terms = vec![
-            "source".to_string(),
-            "fingerprint".to_string(),
+            "orchid".to_string(),
+            "ledger".to_string(),
             "stale".to_string(),
-            "evidence".to_string(),
+            "record".to_string(),
         ];
         let definition = structural_line_bonus(
-            "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",
+            "pub(super) fn orchid_ledger_checkpoint(value: &str) -> (u64, u64) {",
             &terms,
         );
-        let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);
-        let prose = structural_line_bonus("source fingerprint stale evidence", &terms);
+        let reference = structural_line_bonus("orchid_ledger_checkpoint(&value)", &terms);
+        let prose = structural_line_bonus("orchid ledger stale record", &terms);
         assert!(definition > reference);
         assert!(reference > prose);
     }
 
     #[test]
     fn restricted_rust_visibility_is_treated_as_definition_ownership() {
-        let terms = vec!["project".to_string(), "markers".to_string()];
+        let terms = vec!["quasar".to_string(), "table".to_string()];
         assert!(
-            structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)
-                > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)
+            structural_line_bonus("pub(crate) const QUASAR_TABLE: &[&str] = &[", &terms)
+                > structural_line_bonus("QUASAR_TABLE.iter()", &terms)
         );
     }
 
