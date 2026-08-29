@@ -455,14 +455,16 @@ fn is_test_like_source(path: &str) -> bool {
     let folded = path.replace('\\', "/").to_ascii_lowercase();
     let parts = folded.split('/').collect::<Vec<_>>();
     if parts.iter().any(|part| {
-        matches!(*part, "test" | "tests" | "testing" | "__tests__")
-            || part.ends_with(".tests")
+        matches!(*part, "test" | "tests" | "testing" | "__tests__") || part.ends_with(".tests")
     }) {
         return true;
     }
     let file = parts.last().copied().unwrap_or("");
     let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
-    stem.ends_with("_test") || stem.ends_with("-test") || stem.ends_with(".test") || stem.ends_with("tests")
+    stem.ends_with("_test")
+        || stem.ends_with("-test")
+        || stem.ends_with(".test")
+        || stem.ends_with("tests")
 }
 
 pub(super) fn coding_source_prior(path: &str) -> f64 {
@@ -544,7 +546,9 @@ mod coding_source_prior_tests {
     #[test]
     fn implementation_sources_beat_test_mirrors_without_hiding_tests() {
         assert!(is_test_like_source("tests/repo_test.rs"));
-        assert!(is_test_like_source("src/System.CommandLine.Tests/ParserTests.cs"));
+        assert!(is_test_like_source(
+            "src/System.CommandLine.Tests/ParserTests.cs"
+        ));
         assert!(is_test_like_source("test/enum-test.cc"));
         assert!(coding_source_prior("src/command.go") > coding_source_prior("command_test.go"));
         assert!(coding_source_prior("command_test.go") > 0.0);
