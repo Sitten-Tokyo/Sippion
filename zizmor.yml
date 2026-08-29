@@ -25,4 +25,4 @@ rules:
     ignore:
       # Protocol conformance intentionally installs one exact MCP client version with lifecycle
       # scripts disabled. It is test-only and cannot influence release artifacts.
-      - "ci.yml:138"
+      - "ci.yml:147"
