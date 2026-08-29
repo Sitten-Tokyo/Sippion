@@ -1,0 +1,106 @@
+name: Final context quality
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply final context quality changes
+        run: python3 .github/scripts/apply-final-context-quality.py
+
+      - name: Validate Rust and Python
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --locked
+          cargo build --release --locked
+          python3 -m py_compile scripts/retrieval-eval.py scripts/token-calibration.py scripts/tune-context.py
+
+      - name: Validate fixture retrieval evaluation
+        run: python3 scripts/retrieval-eval.py --binary target/release/sippion
+
+      - name: Validate training and frozen holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          train_root="$RUNNER_TEMP/sippion-self-train"
+          holdout_root="$RUNNER_TEMP/sippion-self-holdout"
+          rm -rf "$train_root" "$holdout_root"
+          mkdir -p "$train_root" "$holdout_root"
+          cp -R src "$train_root/src"
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_train_cases.json \
+            --fixture "$train_root" \
+            --baseline-root "$train_root"
+          tar \
+            --exclude='./.git' \
+            --exclude='./target' \
+            --exclude='./eval' \
+            --exclude='./node_modules' \
+            --exclude='./.github/scripts/final-context-quality.py' \
+            --exclude='./.github/scripts/apply-final-context-quality.py' \
+            --exclude='./.github/workflows/final-context-quality.yml' \
+            -cf - . | tar -xf - -C "$holdout_root"
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_holdout_cases.json \
+            --fixture "$holdout_root" \
+            --baseline-root "$holdout_root"
+
+      - name: Smoke pairwise train-only tuner
+        shell: bash
+        run: |
+          set -euo pipefail
+          train_root="$RUNNER_TEMP/sippion-tuner-train"
+          rm -rf "$train_root"
+          mkdir -p "$train_root"
+          cp -R src "$train_root/src"
+          python3 scripts/tune-context.py \
+            --train-cases eval/self_train_cases.json \
+            --train-fixture "$train_root" \
+            --train-baseline-root "$train_root" \
+            --candidate default \
+            --candidate more-structure \
+            --candidate more-evidence \
+            --pairwise-top 2 \
+            --warmup-runs 0 \
+            --measurement-runs 1 \
+            > "$RUNNER_TEMP/tuner.json"
+          python3 - "$RUNNER_TEMP/tuner.json" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert payload['selectionUsesHoldout'] is False
+          assert payload['recommended']
+          assert payload['pairwiseSeeds']
+          assert any(item['name'].startswith('pair:') for item in payload['candidates'])
+          PY
+
+      - name: Commit validated changes and remove helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs docs/architecture.md CHANGELOG.md
+          git rm -f .github/scripts/final-context-quality.py .github/scripts/apply-final-context-quality.py .github/workflows/final-context-quality.yml
+          git commit -m "Strengthen context evaluation and diagnostics"
+          git push origin HEAD:feature/context-efficiency-overhaul
