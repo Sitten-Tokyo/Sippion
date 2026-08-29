@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Offline coordinate search for Sippion context/retrieval constants.
+"""Offline train-only search for Sippion context/retrieval constants.
 
 The tuner never mutates the caller's checkout. It copies the repository to a temporary directory,
-changes only named packer/adaptive constants there, rebuilds Sippion, runs the normal retrieval
-evaluator, and reports a Pareto frontier plus the best train objective. Optional holdout evaluation
-is run only after train scoring so holdout data is not used to select the candidate.
+changes only named packer/adaptive constants there, rebuilds Sippion, and scores the training suite.
+After single-coordinate candidates are scored, the best distinct coordinates are combined pairwise.
+Holdout is evaluated exactly once after train-only selection and never participates in selection.
 """
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+from itertools import combinations
 from pathlib import Path
 
 DEFAULTS = {
@@ -23,7 +25,7 @@ DEFAULTS = {
     "min_new_hits_per_mib": 0.02,
 }
 
-CANDIDATES = [
+SINGLE_CANDIDATES = [
     ("default", {}),
     ("more-structure", {"structure_score": 0.80}),
     ("less-structure", {"structure_score": 0.60}),
@@ -97,7 +99,15 @@ def patch_candidate(root, parameters):
     adaptive_path.write_text(adaptive, encoding="utf-8")
 
 
-def evaluate(repo, binary, cases, fixture, baseline_root=None):
+def evaluate(
+    repo,
+    binary,
+    cases,
+    fixture,
+    baseline_root=None,
+    warmup_runs=0,
+    measurement_runs=2,
+):
     cmd = [
         "python3",
         str(repo / "scripts/retrieval-eval.py"),
@@ -107,6 +117,10 @@ def evaluate(repo, binary, cases, fixture, baseline_root=None):
         str(cases),
         "--fixture",
         str(fixture),
+        "--warmup-runs",
+        str(warmup_runs),
+        "--measurement-runs",
+        str(measurement_runs),
     ]
     if baseline_root is not None:
         cmd.extend(["--baseline-root", str(baseline_root)])
@@ -126,6 +140,7 @@ def objective(summary, returncode):
         + summary.get("mrr", 0.0) * 2.0
         + summary.get("packedExpectedPathRecall", 0.0) * 2.0
         + summary.get("requiredEvidenceAnchorRecall", 0.0) * 2.0
+        + max(summary.get("recallDeltaVsBm25", 0.0), 0.0)
     )
     cost = (
         summary.get("averageEstimatedTokens", 0.0) / 1000.0
@@ -141,11 +156,13 @@ def dominates(left, right):
     left_quality = (
         left["train"]["requiredEvidenceAnchorRecall"],
         left["train"]["packedExpectedPathRecall"],
+        left["train"]["recallAt5"],
         left["train"]["mrr"],
     )
     right_quality = (
         right["train"]["requiredEvidenceAnchorRecall"],
         right["train"]["packedExpectedPathRecall"],
+        right["train"]["recallAt5"],
         right["train"]["mrr"],
     )
     quality_not_worse = all(a >= b for a, b in zip(left_quality, right_quality))
@@ -154,11 +171,64 @@ def dominates(left, right):
         and left["train"]["p95LatencyMs"] <= right["train"]["p95LatencyMs"]
     )
     strictly_better = left_quality != right_quality or (
-        left["train"]["averageEstimatedTokens"], left["train"]["p95LatencyMs"]
+        left["train"]["averageEstimatedTokens"],
+        left["train"]["p95LatencyMs"],
     ) != (
-        right["train"]["averageEstimatedTokens"], right["train"]["p95LatencyMs"]
+        right["train"]["averageEstimatedTokens"],
+        right["train"]["p95LatencyMs"],
     )
     return quality_not_worse and cost_not_worse and strictly_better
+
+
+def build_and_score(
+    work,
+    target_dir,
+    original_context,
+    original_adaptive,
+    name,
+    overrides,
+    train_cases,
+    train_fixture,
+    train_baseline,
+    warmup_runs,
+    measurement_runs,
+):
+    (work / "src/service/context.rs").write_text(original_context, encoding="utf-8")
+    (work / "src/repo/adaptive.rs").write_text(original_adaptive, encoding="utf-8")
+    parameters = {**DEFAULTS, **overrides}
+    patch_candidate(work, parameters)
+    build = run(
+        ["cargo", "build", "--release", "--locked"],
+        cwd=work,
+        env={**os.environ, "CARGO_TARGET_DIR": str(target_dir)},
+    )
+    if build.returncode != 0:
+        return {
+            "name": name,
+            "overrides": overrides,
+            "parameters": parameters,
+            "buildFailed": True,
+            "stderr": build.stderr[-4000:],
+            "objective": -1000.0,
+        }
+    binary = target_dir / "release" / ("sippion.exe" if os.name == "nt" else "sippion")
+    train, returncode = evaluate(
+        work,
+        binary,
+        train_cases,
+        train_fixture,
+        train_baseline,
+        warmup_runs,
+        measurement_runs,
+    )
+    return {
+        "name": name,
+        "overrides": overrides,
+        "parameters": parameters,
+        "train": train,
+        "trainExitCode": returncode,
+        "objective": round(objective(train, returncode), 6),
+    }
 
 
 def main():
@@ -170,8 +240,16 @@ def main():
     parser.add_argument("--holdout-cases", default=None)
     parser.add_argument("--holdout-fixture", default=None)
     parser.add_argument("--holdout-baseline-root", default=None)
-    parser.add_argument("--candidate", action="append", default=None, help="run only named candidate")
+    parser.add_argument("--candidate", action="append", default=None, help="limit single-coordinate seeds")
+    parser.add_argument("--pairwise-top", type=int, default=4)
+    parser.add_argument("--warmup-runs", type=int, default=0)
+    parser.add_argument("--measurement-runs", type=int, default=2)
     args = parser.parse_args()
+
+    if args.pairwise_top < 0:
+        raise SystemExit("pairwise-top must be >= 0")
+    if args.warmup_runs < 0 or args.measurement_runs < 1:
+        raise SystemExit("warmup-runs must be >= 0 and measurement-runs must be >= 1")
 
     source_repo = Path(args.repo).resolve()
     train_cases = Path(args.train_cases).resolve()
@@ -179,12 +257,12 @@ def main():
     train_baseline = Path(args.train_baseline_root).resolve() if args.train_baseline_root else None
     selected_names = set(args.candidate or [])
 
-    candidate_specs = [
+    single_specs = [
         (name, overrides)
-        for name, overrides in CANDIDATES
+        for name, overrides in SINGLE_CANDIDATES
         if not selected_names or name in selected_names
     ]
-    if not candidate_specs:
+    if not single_specs:
         raise SystemExit("no matching tuning candidates")
 
     records = []
@@ -199,49 +277,58 @@ def main():
         original_adaptive = (work / "src/repo/adaptive.rs").read_text(encoding="utf-8")
         target_dir = Path(temp_dir) / "target"
 
-        for name, overrides in candidate_specs:
-            (work / "src/service/context.rs").write_text(original_context, encoding="utf-8")
-            (work / "src/repo/adaptive.rs").write_text(original_adaptive, encoding="utf-8")
-            parameters = {**DEFAULTS, **overrides}
-            patch_candidate(work, parameters)
-            build = run(
-                ["cargo", "build", "--release", "--locked"],
-                cwd=work,
-                env={**__import__("os").environ, "CARGO_TARGET_DIR": str(target_dir)},
-            )
-            if build.returncode != 0:
-                records.append(
-                    {
-                        "name": name,
-                        "parameters": parameters,
-                        "buildFailed": True,
-                        "stderr": build.stderr[-4000:],
-                        "objective": -1000.0,
-                    }
-                )
-                continue
-            binary = target_dir / "release" / ("sippion.exe" if __import__("os").name == "nt" else "sippion")
-            train, returncode = evaluate(
-                work, binary, train_cases, train_fixture, train_baseline
-            )
+        for name, overrides in single_specs:
             records.append(
-                {
-                    "name": name,
-                    "parameters": parameters,
-                    "train": train,
-                    "trainExitCode": returncode,
-                    "objective": round(objective(train, returncode), 6),
-                }
+                build_and_score(
+                    work,
+                    target_dir,
+                    original_context,
+                    original_adaptive,
+                    name,
+                    overrides,
+                    train_cases,
+                    train_fixture,
+                    train_baseline,
+                    args.warmup_runs,
+                    args.measurement_runs,
+                )
+            )
+
+        viable_singles = [
+            record
+            for record in records
+            if "train" in record and not record.get("train", {}).get("failures")
+        ]
+        non_default = [record for record in viable_singles if record["overrides"]]
+        non_default.sort(key=lambda record: record["objective"], reverse=True)
+        pairwise_seeds = non_default[: args.pairwise_top]
+
+        for left, right in combinations(pairwise_seeds, 2):
+            if set(left["overrides"]).intersection(right["overrides"]):
+                continue
+            overrides = {**left["overrides"], **right["overrides"]}
+            name = f"pair:{left['name']}+{right['name']}"
+            records.append(
+                build_and_score(
+                    work,
+                    target_dir,
+                    original_context,
+                    original_adaptive,
+                    name,
+                    overrides,
+                    train_cases,
+                    train_fixture,
+                    train_baseline,
+                    args.warmup_runs,
+                    args.measurement_runs,
+                )
             )
 
         viable = [record for record in records if "train" in record]
         frontier = [
             record["name"]
             for record in viable
-            if not any(
-                other is not record and dominates(other, record)
-                for other in viable
-            )
+            if not any(other is not record and dominates(other, record) for other in viable)
         ]
         recommended = max(viable, key=lambda record: record["objective"]) if viable else None
 
@@ -253,10 +340,12 @@ def main():
             build = run(
                 ["cargo", "build", "--release", "--locked"],
                 cwd=work,
-                env={**__import__("os").environ, "CARGO_TARGET_DIR": str(target_dir)},
+                env={**os.environ, "CARGO_TARGET_DIR": str(target_dir)},
             )
             if build.returncode == 0:
-                binary = target_dir / "release" / ("sippion.exe" if __import__("os").name == "nt" else "sippion")
+                binary = target_dir / "release" / (
+                    "sippion.exe" if os.name == "nt" else "sippion"
+                )
                 holdout, holdout_exit = evaluate(
                     work,
                     binary,
@@ -265,12 +354,19 @@ def main():
                     Path(args.holdout_baseline_root).resolve()
                     if args.holdout_baseline_root
                     else None,
+                    args.warmup_runs,
+                    args.measurement_runs,
                 )
                 holdout["exitCode"] = holdout_exit
 
     output = {
         "selectionUsesHoldout": False,
-        "objective": "quality - 0.4*(averageTokens/1000 + p95LatencyMs/5000); failing gates are penalized",
+        "selectionStages": ["single-coordinate train", "pairwise train", "one post-selection holdout"],
+        "objective": (
+            "quality - 0.4*(averageTokens/1000 + p95MedianLatencyMs/5000); "
+            "failing train gates are penalized"
+        ),
+        "pairwiseSeeds": [record["name"] for record in pairwise_seeds],
         "paretoFrontier": frontier,
         "recommended": recommended["name"] if recommended else None,
         "recommendedParameters": recommended["parameters"] if recommended else None,
