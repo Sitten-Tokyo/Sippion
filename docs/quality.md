@@ -29,7 +29,7 @@ cargo build --release --locked
 python3 scripts/external-retrieval-eval.py --binary target/release/sippion
 ```
 
-The scheduled GitHub Actions workflow intentionally stays outside the required pull-request gate so a transient upstream/network outage cannot block merges. Pull requests that change the external manifest or evaluator still validate their syntax and JSON shape.
+Pull requests that change the external manifest, evaluator, or workflow run the real pinned-repository holdout so reviewers get immediate retrieval evidence. That PR job is observational (`continue-on-error`) because an upstream GitHub/network outage must not block an otherwise deterministic merge. Scheduled and manually dispatched runs remain strict and fail when quality thresholds, evidence anchors, or repository retrieval fail. External-evaluation JSONL is retained as a short-lived Actions artifact for review.
 
 When adding an external case:
 
@@ -89,7 +89,7 @@ Installer findings should be fixed or narrowly justified rather than broadly sup
 
 ## GitHub Actions lint and security audit
 
-`.github/workflows/workflow-lint.yml` runs checksum-pinned actionlint 1.7.12 for workflow syntax/expression validation and zizmor 1.29.0 for GitHub Actions security findings. New actions should continue to use immutable commit SHAs rather than floating tags.
+`.github/workflows/workflow-lint.yml` runs checksum-pinned actionlint 1.7.12 for workflow syntax/expression validation and zizmor 1.29.0 for GitHub Actions security findings. New actions should continue to use immutable commit SHAs rather than floating tags. Accepted findings are line-scoped in `zizmor.yml` with rationale so unrelated future findings still fail CI.
 
 ## Repository module hygiene
 
