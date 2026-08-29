@@ -68,6 +68,36 @@ fn strongest_identifier_term_match(line: &str, terms: &[String]) -> usize {
         .unwrap_or(0)
 }
 
+fn definition_ownership_bonus(identifier: &str, terms: &[String]) -> f64 {
+    let identifier_matches = terms
+        .iter()
+        .filter(|term| identifier.contains(term.as_str()))
+        .count();
+    if identifier_matches == 0 {
+        return 6.0;
+    }
+
+    // Keep the established single-symbol ownership score, but make a compound definition
+    // that owns two or more natural-language query concepts stronger than surrounding prose.
+    // This is definition-only; ordinary compound references retain the weaker bonus below.
+    let coverage_bonus = if identifier_matches >= 2 {
+        // A definition whose identifier owns several query concepts is a strong, local
+        // implementation answer even when repository-wide prose repeats those words more
+        // often. Keep the bonus bounded and apply it only to declaration ownership.
+        42.0 + identifier_matches as f64 * 8.0
+    } else {
+        10.0
+    };
+    // Exact symbol queries keep the established ownership floor. Natural-language queries
+    // gain additional credit when several query concepts are owned by one identifier.
+    if identifier_matches == terms.len() {
+        coverage_bonus.max(14.0)
+    } else {
+        coverage_bonus
+    }
+    .min(72.0)
+}
+
 #[must_use]
 pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     let trimmed = line.trim_start();
@@ -87,6 +117,18 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     } else {
         lower.as_str()
     };
+
+    // JavaScript commonly defines methods by assigning a named/anonymous function to an object
+    // member (`app.handle = function handle(...)`). Treat the member path as declaration ownership
+    // rather than a call/reference so the definition excerpt can beat nearby callback-heavy lines.
+    for marker in [" = function ", " = async function "] {
+        if let Some((owner, _)) = definition_source.split_once(marker) {
+            let owner = owner.trim();
+            if !owner.is_empty() {
+                return definition_ownership_bonus(owner, terms);
+            }
+        }
+    }
 
     let definition_markers = [
         "pub async fn ",
@@ -127,33 +169,7 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
         let end = rest
             .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
             .unwrap_or(rest.len());
-        let identifier = &rest[..end];
-        let identifier_matches = terms
-            .iter()
-            .filter(|term| identifier.contains(term.as_str()))
-            .count();
-        if identifier_matches == 0 {
-            return 6.0;
-        }
-        // Keep the established single-symbol ownership score, but make a compound definition
-        // that owns two or more natural-language query concepts stronger than surrounding prose.
-        // This is definition-only; ordinary compound references retain the weaker bonus below.
-        let coverage_bonus = if identifier_matches >= 2 {
-            // A definition whose identifier owns several query concepts is a strong, local
-            // implementation answer even when repository-wide prose repeats those words more
-            // often. Keep the bonus bounded and apply it only to declaration ownership.
-            42.0 + identifier_matches as f64 * 8.0
-        } else {
-            10.0
-        };
-        // Exact symbol queries keep the established ownership floor. Natural-language queries
-        // gain additional credit when several query concepts are owned by one identifier.
-        return if identifier_matches == terms.len() {
-            coverage_bonus.max(14.0)
-        } else {
-            coverage_bonus
-        }
-        .min(72.0);
+        return definition_ownership_bonus(&rest[..end], terms);
     }
 
     // A compound identifier reference is weaker than its definition, but stronger than prose
@@ -412,6 +428,24 @@ mod tests {
                 &natural
             ) > structural_line_bonus("validate_session_token(token)", &natural)
         );
+    }
+
+    #[test]
+    fn javascript_member_assignment_functions_are_definition_ownership() {
+        let terms = vec![
+            "app".to_string(),
+            "handle".to_string(),
+            "req".to_string(),
+            "res".to_string(),
+            "callback".to_string(),
+        ];
+        let definition = structural_line_bonus(
+            "app.handle = function handle(req, res, callback) {",
+            &terms,
+        );
+        let call = structural_line_bonus("app.handle(req, res, callback);", &terms);
+        assert!(definition > call);
+        assert!(definition >= 50.0);
     }
 
     #[test]
