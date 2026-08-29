@@ -1,0 +1,59 @@
+{
+  "minRecallAt5": 1.0,
+  "minMrr": 0.75,
+  "maxP95EstimatedTokens": 2600,
+  "repositories": [
+    {
+      "name": "serde-json",
+      "url": "https://github.com/serde-rs/json.git",
+      "commit": "afdf6fc67247dd7fa4fcde1381e6ecc6bcc7a30e",
+      "cases": [
+        {
+          "name": "rust-json-deserializer",
+          "query": "Deserializer JSON read",
+          "expectedPaths": ["src/de.rs"],
+          "requiredAnchors": ["pub struct Deserializer"]
+        }
+      ]
+    },
+    {
+      "name": "flask",
+      "url": "https://github.com/pallets/flask.git",
+      "commit": "d318b683471101618febed18996405ad26462110",
+      "cases": [
+        {
+          "name": "python-flask-app",
+          "query": "Flask application request",
+          "expectedPaths": ["src/flask/app.py"],
+          "requiredAnchors": ["class Flask"]
+        }
+      ]
+    },
+    {
+      "name": "express",
+      "url": "https://github.com/expressjs/express.git",
+      "commit": "023767fe9872e029271df1418f73401bff20ff40",
+      "cases": [
+        {
+          "name": "javascript-express-handle",
+          "query": "app handle router callback",
+          "expectedPaths": ["lib/application.js"],
+          "requiredAnchors": ["app.handle"]
+        }
+      ]
+    },
+    {
+      "name": "cobra",
+      "url": "https://github.com/spf13/cobra.git",
+      "commit": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "cases": [
+        {
+          "name": "go-cobra-command",
+          "query": "Command application flags",
+          "expectedPaths": ["command.go"],
+          "requiredAnchors": ["type Command struct"]
+        }
+      ]
+    }
+  ]
+}
