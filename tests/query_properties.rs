@@ -51,13 +51,7 @@ fn successful_normalization_is_idempotent_and_bounded() {
 
 #[test]
 fn accepted_coordination_ids_round_trip_after_trimming() {
-    let ids = [
-        "agent-1",
-        "session.alpha",
-        "A_B:C-9",
-        "  worker.007  ",
-        "z",
-    ];
+    let ids = ["agent-1", "session.alpha", "A_B:C-9", "  worker.007  ", "z"];
 
     for id in ids {
         let coordination = McpToolInput {
