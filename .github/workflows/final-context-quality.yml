@@ -22,7 +22,18 @@ jobs:
           components: rustfmt, clippy
 
       - name: Apply final context quality changes
-        run: python3 .github/scripts/apply-final-context-quality.py
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/apply-final-context-quality.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/service/context.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '.copied().unwrap_or_else(|| {'
+          if text.count(old) != 1:
+              raise SystemExit(f'clippy fallback rewrite: expected one match, got {text.count(old)}')
+          path.write_text(text.replace(old, '.copied().unwrap_or({', 1), encoding='utf-8')
+          PY
 
       - name: Validate Rust and Python
         run: |
