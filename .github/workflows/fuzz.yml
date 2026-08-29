@@ -31,20 +31,18 @@ jobs:
           persist-credentials: false
 
       - name: Install pinned nightly Rust
-        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
-        with:
-          toolchain: nightly-2026-08-29
+        run: rustup toolchain install nightly-2026-08-29 --profile minimal --no-self-update
 
       - name: Install pinned cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.2 --locked
+        run: cargo +nightly-2026-08-29 install cargo-fuzz --version 0.13.2 --locked
 
       - name: Build fuzz target
-        run: cargo fuzz build query_normalize
+        run: cargo +nightly-2026-08-29 fuzz build query_normalize
 
       - name: Fuzz query normalization on pull requests
         if: github.event_name == 'pull_request'
-        run: cargo fuzz run query_normalize -- -max_total_time=30 -timeout=10
+        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=30 -timeout=10
 
       - name: Fuzz query normalization on schedule or demand
         if: github.event_name != 'pull_request'
-        run: cargo fuzz run query_normalize -- -max_total_time=180 -timeout=10
+        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=180 -timeout=10
