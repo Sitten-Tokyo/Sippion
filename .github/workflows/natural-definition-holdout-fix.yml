@@ -27,9 +27,22 @@ jobs:
           from pathlib import Path
 
           def replace_once(text, old, new, label):
-              if text.count(old) != 1:
-                  raise SystemExit(f'{label}: expected one match, got {text.count(old)}')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, got {count}')
               return text.replace(old, new, 1)
+
+          def rewrite_test(source, fn_name, replacements):
+              marker = f'    fn {fn_name}() {{'
+              start = source.index(marker)
+              next_test = source.find('    #[test]', start + len(marker))
+              end = len(source) if next_test < 0 else next_test
+              segment = source[start:end]
+              for old, new in replacements:
+                  if old not in segment:
+                      raise SystemExit(f'{fn_name}: missing {old!r}')
+                  segment = segment.replace(old, new)
+              return source[:start] + segment + source[end:]
 
           hybrid = Path('src/hybrid.rs')
           text = hybrid.read_text(encoding='utf-8')
@@ -47,19 +60,6 @@ jobs:
               'definition bonus',
           )
           text = replace_once(text, '.min(22.0);', '.min(36.0);', 'definition cap')
-
-          def rewrite_test(source, fn_name, replacements):
-              marker = f'    fn {fn_name}() {{'
-              start = source.index(marker)
-              next_test = source.find('    #[test]', start + len(marker))
-              end = len(source) if next_test < 0 else next_test
-              segment = source[start:end]
-              for old, new in replacements:
-                  if old not in segment:
-                      raise SystemExit(f'{fn_name}: missing {old!r}')
-                  segment = segment.replace(old, new)
-              return source[:start] + segment + source[end:]
-
           text = rewrite_test(text, 'natural_query_rewards_partial_identifier_ownership_and_references', [
               ('"source".to_string()', '"orchid".to_string()'),
               ('"fingerprint".to_string()', '"ledger".to_string()'),
@@ -86,7 +86,7 @@ jobs:
               text: String,
               utility: f64,
               token_cost: usize,
-          }'''.replace('          ', ''),
+          }'''.replace('              ', ''),
               '''struct ContextAtom {
               kind: ContextAtomKind,
               path: String,
@@ -94,7 +94,7 @@ jobs:
               utility: f64,
               token_cost: usize,
               query_symbol_matches: usize,
-          }'''.replace('          ', ''),
+          }'''.replace('              ', ''),
               'context atom field',
           )
           text = replace_once(
@@ -103,83 +103,70 @@ jobs:
               'fn structure_atom(\n    query: &NormalizedQuery,\n    entry: &RepoMapEntry,\n    weights: ContextPackerWeights,\n) -> ContextAtom {',
               'structure atom signature',
           )
-          text = replace_once(
-              text,
-              '''    for symbol in entry.symbols.iter().take(3) {
-              text.push_str(&format!(
-                  "  {} {}:{} {}\\n",
-                  symbol.kind,
-                  escaped(&symbol.name),
-                  symbol.line,
-                  escaped(symbol.signature.trim())
-              ));
-          }
-          let semantic_bonus ='''.replace('          ', ''),
-              '''    let mut visible_symbol_text = String::new();
-          for symbol in entry.symbols.iter().take(3) {
-              text.push_str(&format!(
-                  "  {} {}:{} {}\\n",
-                  symbol.kind,
-                  escaped(&symbol.name),
-                  symbol.line,
-                  escaped(symbol.signature.trim())
-              ));
-              visible_symbol_text.push_str(&symbol.name);
-              visible_symbol_text.push(' ');
-              visible_symbol_text.push_str(&symbol.signature);
-              visible_symbol_text.push(' ');
-          }
-          let folded_symbols = crate::core::unicode_search_fold(&visible_symbol_text);
-          let query_symbol_matches = query
-              .terms
-              .iter()
-              .filter(|term| folded_symbols.contains(term.as_str()))
-              .count();
-          let semantic_bonus ='''.replace('          ', ''),
-              'visible symbol query matching',
+
+          structure_start = text.index('fn structure_atom(')
+          structure_end = text.index('\nfn framed_evidence_body', structure_start)
+          structure = text[structure_start:structure_end]
+          structure = replace_once(
+              structure,
+              '    for symbol in entry.symbols.iter().take(3) {\n',
+              '    let mut visible_symbol_text = String::new();\n    for symbol in entry.symbols.iter().take(3) {\n',
+              'visible symbol buffer',
           )
-          text = replace_once(
-              text,
-              '''        text,
-              utility,
-          }
-          }
-
-          fn framed_evidence_body'''.replace('          ', ''),
-              '''        text,
-              utility,
-              query_symbol_matches,
-          }
-          }
-
-          fn framed_evidence_body'''.replace('          ', ''),
-              'structure atom match field',
+          structure = replace_once(
+              structure,
+              '''            escaped(symbol.signature.trim())
+                  ));
+              }
+              let semantic_bonus ='''.replace('              ', ''),
+              '''            escaped(symbol.signature.trim())
+                  ));
+                  visible_symbol_text.push_str(&symbol.name);
+                  visible_symbol_text.push(' ');
+                  visible_symbol_text.push_str(&symbol.signature);
+                  visible_symbol_text.push(' ');
+              }
+              let folded_symbols = crate::core::unicode_search_fold(&visible_symbol_text);
+              let query_symbol_matches = query
+                  .terms
+                  .iter()
+                  .filter(|term| folded_symbols.contains(term.as_str()))
+                  .count();
+              let semantic_bonus ='''.replace('              ', ''),
+              'visible symbol relevance',
           )
-          text = replace_once(
-              text,
-              '''        text,
-              utility,
-          }
-          }
-
-          fn best_fitting_atom'''.replace('          ', ''),
-              '''        text,
-              utility,
-              query_symbol_matches: 0,
-          }
-          }
-
-          fn best_fitting_atom'''.replace('          ', ''),
-              'evidence atom match field',
+          structure = replace_once(
+              structure,
+              '        utility,\n    }\n}',
+              '        utility,\n        query_symbol_matches,\n    }\n}',
+              'structure atom relevance field',
           )
+          text = text[:structure_start] + structure + text[structure_end:]
+
+          evidence_start = text.index('fn evidence_atom(')
+          evidence_end = text.index('\nfn best_fitting_atom', evidence_start)
+          evidence = text[evidence_start:evidence_end]
+          evidence = replace_once(
+              evidence,
+              '        utility,\n    }\n}',
+              '        utility,\n        query_symbol_matches: 0,\n    }\n}',
+              'evidence atom relevance field',
+          )
+          text = text[:evidence_start] + evidence + text[evidence_end:]
+
           text = replace_once(
               text,
               '    atoms.extend(entries.iter().map(|entry| structure_atom(entry, weights)));',
-              '    atoms.extend(\n        entries\n            .iter()\n            .map(|entry| structure_atom(query, entry, weights)),\n    );',
+              '''    atoms.extend(
+                  entries
+                      .iter()
+                      .map(|entry| structure_atom(query, entry, weights)),
+              );'''.replace('              ', ''),
               'structure atom construction',
           )
-          marker = '''    while order.len() < MAX_PACKED_ATOMS {
-          '''.replace('          ', '')
+
+          pack_start = text.index('fn pack_context_with_weights(')
+          greedy_at = text.index('    while order.len() < MAX_PACKED_ATOMS {', pack_start)
           reservation = '''    // Preserve one query-relevant definition/signature structure when it fits. This keeps a
           // compact symbol-level ownership signal model-visible instead of letting prose-heavy atoms
           // crowd it out, while retaining the same soft token and hard atom budgets.
@@ -214,29 +201,22 @@ jobs:
               }
           }
 
-          while order.len() < MAX_PACKED_ATOMS {
-          '''.replace('          ', '')
-          text = replace_once(text, marker, reservation, 'query structure reservation')
-          text = text.replace(
-              '''                utility: 10.0,
-              token_cost: 10,
-          }'''.replace('          ', ''),
-              '''                utility: 10.0,
-              token_cost: 10,
-              query_symbol_matches: 0,
-          }'''.replace('          ', ''),
+          '''
+          text = text[:greedy_at] + reservation + text[greedy_at:]
+
+          novelty_start = text.index('    fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {')
+          novelty_end = text.index('\n    }', novelty_start) + len('\n    }')
+          novelty = text[novelty_start:novelty_end]
+          needle = '                token_cost: 10,\n            },'
+          if novelty.count(needle) != 2:
+              raise SystemExit(f'novelty atom initializers: expected 2, got {novelty.count(needle)}')
+          novelty = novelty.replace(
+              needle,
+              '                token_cost: 10,\n                query_symbol_matches: 0,\n            },',
           )
-          text = text.replace(
-              '''                utility: 6.0,
-              token_cost: 10,
-          }'''.replace('          ', ''),
-              '''                utility: 6.0,
-              token_cost: 10,
-              query_symbol_matches: 0,
-          }'''.replace('          ', ''),
-          )
-          test_marker = '''    #[test]
-          fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {'''.replace('          ', '')
+          text = text[:novelty_start] + novelty + text[novelty_end:]
+
+          test_marker = '    #[test]\n    fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {'
           test = '''    #[test]
           fn packer_reserves_query_relevant_structure_symbol() {
               let mut entries = (0..12)
