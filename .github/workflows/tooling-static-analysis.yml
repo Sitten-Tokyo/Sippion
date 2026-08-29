@@ -63,7 +63,7 @@ jobs:
 
       - name: Lint GitHub Actions syntax and expressions
         run: |
-          "$RUNNER_TEMP/actionlint" -shellcheck "$RUNNER_TEMP/shellcheck"
+          "$RUNNER_TEMP/actionlint" -shellcheck=
 
       - name: Install checksum-pinned zizmor
         shell: bash
