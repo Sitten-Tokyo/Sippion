@@ -63,11 +63,14 @@ jobs:
       - name: Analyze PowerShell installers
         shell: pwsh
         run: |
+          # These interactive bootstrap/install scripts intentionally use Write-Host for progress
+          # text. Replacing it with pipeline output would change observable installer semantics.
+          # Keep all other Warning/Error rules enabled.
           $results = @(
             'scripts/bootstrap.ps1',
             'scripts/install.ps1'
           ) | ForEach-Object {
-            Invoke-ScriptAnalyzer -Path $_ -Severity Warning,Error
+            Invoke-ScriptAnalyzer -Path $_ -Severity Warning,Error -ExcludeRule PSAvoidUsingWriteHost
           }
           if ($results) {
             $results | Format-Table -AutoSize | Out-String | Write-Error
