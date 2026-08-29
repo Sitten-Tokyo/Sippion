@@ -38,7 +38,7 @@ jobs:
           } else {
               coverage_bonus
           }
-          .min(22.0);'''
+          .min(22.0);'''.replace('          ', '        ')
           new = '''        if identifier_matches == 0 {
               return 6.0;
           }
@@ -56,7 +56,7 @@ jobs:
           } else {
               coverage_bonus
           }
-          .min(36.0);'''
+          .min(36.0);'''.replace('          ', '        ')
           if text.count(old) != 1:
               raise SystemExit('definition bonus block mismatch')
           text = text.replace(old, new, 1)
@@ -71,7 +71,7 @@ jobs:
               &terms,
           );
           let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);
-          let prose = structural_line_bonus("source fingerprint stale evidence", &terms);'''
+          let prose = structural_line_bonus("source fingerprint stale evidence", &terms);'''.replace('          ', '        ')
           new_test = '''        let terms = vec![
               "orchid".to_string(),
               "ledger".to_string(),
@@ -83,7 +83,7 @@ jobs:
               &terms,
           );
           let reference = structural_line_bonus("orchid_ledger_checkpoint(&value)", &terms);
-          let prose = structural_line_bonus("orchid ledger stale record", &terms);'''
+          let prose = structural_line_bonus("orchid ledger stale record", &terms);'''.replace('          ', '        ')
           if text.count(old_test) != 1:
               raise SystemExit('natural query test block mismatch')
           text = text.replace(old_test, new_test, 1)
@@ -91,12 +91,12 @@ jobs:
           assert!(
               structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)
                   > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)
-          );'''
+          );'''.replace('          ', '        ')
           new_restricted = '''        let terms = vec!["quasar".to_string(), "table".to_string()];
           assert!(
               structural_line_bonus("pub(crate) const QUASAR_TABLE: &[&str] = &[", &terms)
                   > structural_line_bonus("QUASAR_TABLE.iter()", &terms)
-          );'''
+          );'''.replace('          ', '        ')
           if text.count(old_restricted) != 1:
               raise SystemExit('restricted visibility test block mismatch')
           path.write_text(text.replace(old_restricted, new_restricted, 1), encoding='utf-8')
