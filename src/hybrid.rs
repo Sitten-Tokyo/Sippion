@@ -55,6 +55,19 @@ pub fn bm25_score(
         .sum()
 }
 
+fn strongest_identifier_term_match(line: &str, terms: &[String]) -> usize {
+    line.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
+        .filter(|identifier| !identifier.is_empty())
+        .map(|identifier| {
+            terms
+                .iter()
+                .filter(|term| identifier.contains(term.as_str()))
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 #[must_use]
 pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     let trimmed = line.trim_start();
@@ -62,31 +75,95 @@ pub fn structural_line_bonus(line: &str, terms: &[String]) -> f64 {
     if !terms.iter().any(|term| lower.contains(term)) {
         return 0.0;
     }
+
+    // Rust restricted visibility (`pub(super)`, `pub(crate)`, `pub(in path)`) describes the
+    // ownership boundary, not a different declaration kind. Strip that prefix only for
+    // declaration detection so the same scoring works for ordinary and restricted definitions.
+    let definition_source = if lower.starts_with("pub(") {
+        lower
+            .find(") ")
+            .map(|end| lower[end + 2..].trim_start())
+            .unwrap_or(lower.as_str())
+    } else {
+        lower.as_str()
+    };
+
     let definition_markers = [
-        "fn ",
+        "pub async fn ",
         "pub fn ",
+        "async fn ",
+        "fn ",
+        "async def ",
         "def ",
-        "class ",
-        "struct ",
-        "enum ",
-        "trait ",
-        "interface ",
-        "func ",
-        "type ",
-        "function ",
+        "export async function ",
         "export function ",
+        "function ",
+        "func ",
+        "pub struct ",
+        "struct ",
+        "pub enum ",
+        "enum ",
+        "pub trait ",
+        "trait ",
+        "export interface ",
+        "interface ",
+        "pub class ",
         "export class ",
-        "impl ",
-        "mod ",
+        "class ",
+        "pub type ",
+        "type ",
+        "pub const ",
         "const ",
+        "pub static ",
         "static ",
+        "pub mod ",
+        "mod ",
     ];
-    if definition_markers
+    if let Some(marker) = definition_markers
         .iter()
-        .any(|marker| lower.starts_with(marker))
+        .find(|marker| definition_source.starts_with(**marker))
     {
-        5.0
-    } else if ["use ", "import ", "from ", "require(", "#include"]
+        let rest = definition_source[marker.len()..].trim_start();
+        let end = rest
+            .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '$'))
+            .unwrap_or(rest.len());
+        let identifier = &rest[..end];
+        let identifier_matches = terms
+            .iter()
+            .filter(|term| identifier.contains(term.as_str()))
+            .count();
+        if identifier_matches == 0 {
+            return 6.0;
+        }
+        // Keep the established single-symbol ownership score, but make a compound definition
+        // that owns two or more natural-language query concepts stronger than surrounding prose.
+        // This is definition-only; ordinary compound references retain the weaker bonus below.
+        let coverage_bonus = if identifier_matches >= 2 {
+            // A definition whose identifier owns several query concepts is a strong, local
+            // implementation answer even when repository-wide prose repeats those words more
+            // often. Keep the bonus bounded and apply it only to declaration ownership.
+            42.0 + identifier_matches as f64 * 8.0
+        } else {
+            10.0
+        };
+        // Exact symbol queries keep the established ownership floor. Natural-language queries
+        // gain additional credit when several query concepts are owned by one identifier.
+        return if identifier_matches == terms.len() {
+            coverage_bonus.max(14.0)
+        } else {
+            coverage_bonus
+        }
+        .min(72.0);
+    }
+
+    // A compound identifier reference is weaker than its definition, but stronger than prose
+    // that merely repeats the same words. This helps implementation call sites survive broad
+    // repository searches without allowing repeated calls to outrank symbol ownership.
+    let identifier_matches = strongest_identifier_term_match(&lower, terms);
+    if identifier_matches >= 2 {
+        return identifier_matches as f64 * 3.0;
+    }
+    if ["use ", "import ", "from ", "require(", "#include"]
         .iter()
         .any(|marker| lower.starts_with(marker))
     {
@@ -111,6 +188,12 @@ fn identifier_after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
         .unwrap_or(rest.len());
     let value = &rest[..end];
     (!value.is_empty()).then_some(value)
+}
+
+fn strip_rust_restricted_visibility(line: &str) -> &str {
+    line.strip_prefix("pub(")
+        .and_then(|rest| rest.split_once(") ").map(|(_, declaration)| declaration))
+        .unwrap_or(line)
 }
 
 #[must_use]
@@ -151,8 +234,9 @@ pub fn extract_symbols(text: &str, max_symbols: usize) -> Vec<Symbol> {
     let mut seen = HashSet::new();
     for (index, raw) in text.lines().enumerate() {
         let trimmed = raw.trim_start();
+        let declaration = strip_rust_restricted_visibility(trimmed);
         for &(marker, kind) in markers {
-            if let Some(name) = identifier_after(trimmed, marker) {
+            if let Some(name) = identifier_after(declaration, marker) {
                 if seen.insert(name.to_string()) {
                     let signature = trimmed.chars().take(220).collect::<String>();
                     symbols.push(Symbol {
@@ -170,6 +254,66 @@ pub fn extract_symbols(text: &str, max_symbols: usize) -> Vec<Symbol> {
         }
     }
     symbols
+}
+
+fn symbol_identifier_fragments(identifier: &str) -> Vec<String> {
+    let mut fragments = Vec::new();
+    for coarse in identifier.split(['_', '-']) {
+        let chars = coarse.chars().collect::<Vec<_>>();
+        if chars.len() < 2 {
+            continue;
+        }
+        let mut start = 0;
+        for index in 1..chars.len() {
+            let previous = chars[index - 1];
+            let current = chars[index];
+            let next = chars.get(index + 1).copied();
+            let camel_boundary = current.is_uppercase()
+                && (previous.is_lowercase()
+                    || previous.is_ascii_digit()
+                    || (previous.is_uppercase() && next.is_some_and(char::is_lowercase)));
+            if camel_boundary {
+                let fragment = chars[start..index].iter().collect::<String>();
+                if fragment.chars().count() >= 2 {
+                    fragments.push(crate::core::unicode_search_fold(&fragment));
+                }
+                start = index;
+            }
+        }
+        let fragment = chars[start..].iter().collect::<String>();
+        if fragment.chars().count() >= 2 {
+            fragments.push(crate::core::unicode_search_fold(&fragment));
+        }
+    }
+    fragments
+}
+
+fn symbol_fragment_matches_term(fragment: &str, term: &str) -> bool {
+    fragment == term
+        || fragment
+            .strip_suffix('s')
+            .is_some_and(|singular| singular == term)
+        || term
+            .strip_suffix('s')
+            .is_some_and(|singular| singular == fragment)
+}
+
+pub(crate) fn symbol_term_match_score(name: &str, signature: &str, term: &str) -> usize {
+    let folded_name = crate::core::unicode_search_fold(name);
+    if folded_name == term {
+        8
+    } else if symbol_identifier_fragments(name)
+        .iter()
+        .any(|fragment| symbol_fragment_matches_term(fragment, term))
+    {
+        6
+    } else if folded_name.contains(term) {
+        2
+    } else if crate::core::unicode_search_fold(signature).contains(term) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Weighted PageRank for semantic repository edges. Lexical coincidences can remain weak while
@@ -249,6 +393,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn definition_ownership_outranks_import_and_call_references() {
+        let symbol = vec!["validate_session_token".to_string()];
+        let natural = vec![
+            "session".to_string(),
+            "token".to_string(),
+            "validate".to_string(),
+        ];
+        assert!(
+            structural_line_bonus(
+                "pub fn validate_session_token(token: &str) -> bool {",
+                &symbol
+            ) > structural_line_bonus("use crate::auth::validate_session_token;", &symbol)
+        );
+        assert!(
+            structural_line_bonus(
+                "pub fn validate_session_token(token: &str) -> bool {",
+                &natural
+            ) > structural_line_bonus("validate_session_token(token)", &natural)
+        );
+    }
+
+    #[test]
+    fn fallback_symbol_extraction_handles_restricted_rust_visibility() {
+        let symbols = extract_symbols(
+            "pub(super) fn pack_context() {}\npub(crate) struct RepositoryEngine {}\npub(in crate::repo) const TOKEN_LIMIT: usize = 1;\n",
+            8,
+        );
+        assert!(symbols.iter().any(|symbol| symbol.name == "pack_context"));
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "RepositoryEngine")
+        );
+        assert!(symbols.iter().any(|symbol| symbol.name == "TOKEN_LIMIT"));
+    }
+
+    #[test]
+    fn symbol_matching_handles_plural_identifier_fragments() {
+        assert_eq!(symbol_term_match_score("PROJECT_MARKERS", "", "project"), 6);
+        assert_eq!(symbol_term_match_score("PROJECT_MARKERS", "", "marker"), 6);
+    }
+
+    #[test]
+    fn natural_query_rewards_partial_identifier_ownership_and_references() {
+        let terms = vec![
+            "orchid".to_string(),
+            "ledger".to_string(),
+            "stale".to_string(),
+            "record".to_string(),
+        ];
+        let definition = structural_line_bonus(
+            "pub(super) fn orchid_ledger_checkpoint(value: &str) -> (u64, u64) {",
+            &terms,
+        );
+        let reference = structural_line_bonus("orchid_ledger_checkpoint(&value)", &terms);
+        let prose = structural_line_bonus("orchid ledger stale record", &terms);
+        assert!(definition > reference);
+        assert!(reference > prose);
+    }
+
+    #[test]
+    fn restricted_rust_visibility_is_treated_as_definition_ownership() {
+        let terms = vec!["quasar".to_string(), "table".to_string()];
+        assert!(
+            structural_line_bonus("pub(crate) const QUASAR_TABLE: &[&str] = &[", &terms)
+                > structural_line_bonus("QUASAR_TABLE.iter()", &terms)
+        );
+    }
+
+    #[test]
     fn bm25_prefers_repeated_rare_term() {
         let df = [1, 2];
         let a = bm25_score(&[3, 1], 20, 20.0, &df, 10);
@@ -289,6 +503,7 @@ mod tests {
         let call_rank = weighted_pagerank(&call_only, 20);
         assert!(call_rank[1] > lexical_rank[1]);
     }
+
     #[test]
     fn term_statistics_treats_composed_and_decomposed_tokens_equally() {
         let term = crate::core::unicode_search_fold("CAFÉAuth");

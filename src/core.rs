@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::cmp::Ordering;
 
 use serde::Deserialize;
@@ -208,7 +209,7 @@ fn query_schema() -> Value {
 pub fn mcp_tool_definition() -> Value {
     json!({
         "name": "repo_context",
-        "description": "Single adaptive repository-context tool. Internally combines a RAM-only incremental lexical index, BM25, path/session-agent ranking, bounded shared Tree-sitter + source-only semantic analysis, a cached weighted structural graph, cross-agent diversity, deduplication, excerpt extraction, conservative compaction, and adaptive context packing.",
+        "description": "Find and pack small, relevant repository context for an AI coding task. Local, read-only, bounded, and token-aware.",
         "annotations": {"readOnlyHint": true, "openWorldHint": false},
         "inputSchema": query_schema(),
         "_meta": {"io.sippion/capability": "repository.context"}
@@ -259,8 +260,8 @@ pub fn capability_registry() -> Value {
                 "outputOptimizer": [
                     "deduplication",
                     "excerpt extraction",
-                    "RTK-style compression",
-                    "Repomix-style packing"
+                    "conservative source compaction",
+                    "utility-per-token context packing"
                 ],
                 "returnFormat": "ranked structural summary plus bounded multi-file evidence pack"
             }
@@ -275,12 +276,12 @@ pub struct ModelVisibleBudget {
 }
 
 pub const MIN_CONTEXT_BUDGET: ModelVisibleBudget = ModelVisibleBudget {
-    target_estimated_tokens: 1_800,
+    target_estimated_tokens: 1_400,
     hard_model_text_bytes: 8 * 1024,
 };
 
 pub const MAX_CONTEXT_BUDGET: ModelVisibleBudget = ModelVisibleBudget {
-    target_estimated_tokens: 7_200,
+    target_estimated_tokens: 2_600,
     hard_model_text_bytes: 32 * 1024,
 };
 
@@ -305,11 +306,11 @@ pub fn adaptive_context_budget(
     match tier {
         0 => MIN_CONTEXT_BUDGET,
         1 => ModelVisibleBudget {
-            target_estimated_tokens: 3_600,
+            target_estimated_tokens: 1_800,
             hard_model_text_bytes: 16 * 1024,
         },
         2 => ModelVisibleBudget {
-            target_estimated_tokens: 5_400,
+            target_estimated_tokens: 2_200,
             hard_model_text_bytes: 24 * 1024,
         },
         _ => MAX_CONTEXT_BUDGET,
@@ -337,10 +338,12 @@ pub struct RenderExcerpt {
     pub score: f64,
 }
 
+#[cfg(test)]
 fn escaped_path(path: &str) -> String {
     serde_json::to_string(path).unwrap_or_else(|_| "\"<invalid-path>\"".to_string())
 }
 
+#[cfg(test)]
 fn excerpt_header(excerpt: &RenderExcerpt) -> String {
     if excerpt.start_line == 0 && excerpt.end_line == 0 {
         let match_kind = if excerpt.body.is_empty() {
@@ -361,6 +364,7 @@ fn excerpt_header(excerpt: &RenderExcerpt) -> String {
     )
 }
 
+#[cfg(test)]
 fn serialize_excerpt(excerpt: &RenderExcerpt) -> String {
     let mut out = excerpt_header(excerpt);
     if !excerpt.body.is_empty() {
@@ -381,6 +385,7 @@ pub(crate) fn truncate_utf8_prefix(text: &str, max_bytes: usize) -> &str {
     &text[..end]
 }
 
+#[cfg(test)]
 fn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -> Option<String> {
     const MARKER: &str =
         "\n[SIPPION_TRUNCATED: narrow the query or use a native line-range read]\n";
@@ -415,6 +420,7 @@ fn truncate_first_excerpt(excerpt: &RenderExcerpt, budget: ModelVisibleBudget) -
 
 /// Greedily admits highest-scoring evidence. If the best excerpt alone is oversized, return a
 /// marked prefix rather than failing and pushing the agent into an unbounded native search.
+#[cfg(test)]
 #[must_use]
 pub fn render_excerpts(mut excerpts: Vec<RenderExcerpt>, budget: ModelVisibleBudget) -> String {
     excerpts.sort_by(|a, b| {
@@ -658,6 +664,22 @@ mod tests {
         assert_eq!(
             adaptive_context_budget(0.30, 17, 20, 8).hard_model_text_bytes,
             32 * 1024
+        );
+        assert_eq!(
+            adaptive_context_budget(0.95, 2, 3, 2).target_estimated_tokens,
+            1_400
+        );
+        assert_eq!(
+            adaptive_context_budget(0.80, 6, 8, 3).target_estimated_tokens,
+            1_800
+        );
+        assert_eq!(
+            adaptive_context_budget(0.60, 12, 14, 5).target_estimated_tokens,
+            2_200
+        );
+        assert_eq!(
+            adaptive_context_budget(0.30, 17, 20, 8).target_estimated_tokens,
+            2_600
         );
     }
 

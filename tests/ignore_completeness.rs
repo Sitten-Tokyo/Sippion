@@ -63,7 +63,7 @@ fn query_missing_marker(root: &std::path::Path) -> String {
 }
 
 fn assert_complete_no_match(text: &str) {
-    assert!(text.contains("policy_excluded=0"));
+    assert!(text.contains("excluded=0"));
     assert!(text.contains("\n[NO_MATCH]\n"));
     assert!(!text.contains("NO_MATCH_IN_SEARCHABLE_SET"));
 }
@@ -108,7 +108,7 @@ fn effective_gitignore_still_prevents_absolute_no_match() {
     .expect("hidden");
 
     let text = query_missing_marker(&root);
-    assert!(!text.contains("policy_excluded=0"));
+    assert!(!text.contains("excluded=0"));
     assert!(text.contains("NO_MATCH_IN_SEARCHABLE_SET"));
     assert!(!text.contains("\n[NO_MATCH]\n"));
 

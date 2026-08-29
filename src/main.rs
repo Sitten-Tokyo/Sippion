@@ -11,13 +11,11 @@ mod setup;
 mod syntax;
 
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::{
-    MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES,
-    heuristic_v3_estimated_tokens,
-};
+use crate::core::{MODEL_VISIBLE_CONTEXT_HARD_BYTES, McpToolInput, SUPPORTED_LANGUAGE_NAMES};
 use crate::service::{
     LocalRepositoryService, MAX_CONFIGURED_SCAN_BYTES, MAX_SCAN_BYTES, MIN_CONFIGURED_SCAN_BYTES,
     RepositoryService,
@@ -69,9 +67,13 @@ fn run() -> Result<(), String> {
             managed::run_uninstall()
         }
         Some("inspect") => run_inspect_command(&rest),
+        Some("estimate-tokens") => run_estimate_tokens_command(&rest),
         Some("query") => run_query_command(&rest),
         Some("mcp") => run_mcp_command(&rest),
-        _ => Err("supported commands: mcp, query, inspect, setup, doctor, uninstall".to_string()),
+        _ => Err(
+            "supported commands: mcp, query, estimate-tokens, inspect, setup, doctor, uninstall"
+                .to_string(),
+        ),
     }
 }
 
@@ -114,6 +116,7 @@ fn run_inspect_command(args: &[OsString]) -> Result<(), String> {
             "mcpProtocolVersions": protocols,
             "modelVisibleContextHardBytes": MODEL_VISIBLE_CONTEXT_HARD_BYTES,
             "diagnosticsInRepoContext": false,
+            "tokenEstimator": "heuristic-v3",
             "capabilityRegistry": crate::core::capability_registry(),
         });
         println!(
@@ -133,7 +136,35 @@ fn run_inspect_command(args: &[OsString]) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        println!("token estimator: heuristic-v3");
         println!("diagnostics in repo_context: no (local CLI only)");
+    }
+    Ok(())
+}
+
+fn run_estimate_tokens_command(args: &[OsString]) -> Result<(), String> {
+    let json_output = match args {
+        [] => false,
+        [arg] if arg.to_str() == Some("--json") => true,
+        _ => return Err("estimate-tokens accepts only optional --json".to_string()),
+    };
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(|error| format!("cannot read stdin: {error}"))?;
+    let estimated_tokens = crate::core::heuristic_v3_estimated_tokens(&text);
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "estimator": "heuristic-v3",
+                "utf8Bytes": text.len(),
+                "estimatedTokens": estimated_tokens,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{estimated_tokens}");
     }
     Ok(())
 }
@@ -258,63 +289,6 @@ fn run_mcp_command(args: &[OsString]) -> Result<(), String> {
     mcp::serve_stdio(service).map_err(|error| format!("stdio MCP failed: {error}"))
 }
 
-#[derive(Debug, serde::Serialize)]
-struct RankedFileDiagnostic {
-    path: String,
-    rank: f64,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct QueryDiagnostic {
-    returned_bytes: usize,
-    estimated_tokens: usize,
-    hard_budget_bytes: Option<usize>,
-    target_estimated_tokens: Option<usize>,
-    scanned_bytes: Option<usize>,
-    ranked_files: Vec<RankedFileDiagnostic>,
-}
-
-fn parse_numeric_field(line: &str, key: &str) -> Option<usize> {
-    line.split_whitespace().find_map(|part| {
-        part.strip_prefix(key)
-            .and_then(|value| value.parse::<usize>().ok())
-    })
-}
-
-fn query_diagnostic(context: &str) -> QueryDiagnostic {
-    let mut ranked_files = Vec::new();
-    let mut hard_budget_bytes = None;
-    let mut target_estimated_tokens = None;
-    let mut scanned_bytes = None;
-    for line in context.lines() {
-        if line.starts_with("PACK ") {
-            hard_budget_bytes = parse_numeric_field(line, "hard_bytes=");
-            target_estimated_tokens = parse_numeric_field(line, "target_estimated_tokens=");
-        } else if line.starts_with("COVERAGE ") {
-            scanned_bytes = parse_numeric_field(line, "scanned_bytes=");
-        } else if let Some(rest) = line.strip_prefix("FILE path=") {
-            if let Some((path_json, rest)) = rest.split_once(" rank=") {
-                if let (Ok(path), Some(rank_text)) = (
-                    serde_json::from_str::<String>(path_json),
-                    rest.split_whitespace().next(),
-                ) {
-                    if let Ok(rank) = rank_text.parse::<f64>() {
-                        ranked_files.push(RankedFileDiagnostic { path, rank });
-                    }
-                }
-            }
-        }
-    }
-    QueryDiagnostic {
-        returned_bytes: context.len(),
-        estimated_tokens: heuristic_v3_estimated_tokens(context),
-        hard_budget_bytes,
-        target_estimated_tokens,
-        scanned_bytes,
-        ranked_files,
-    }
-}
-
 fn run_query_command(args: &[OsString]) -> Result<(), String> {
     let mut options = RepositoryOptions::default();
     let mut json_output = false;
@@ -388,10 +362,11 @@ fn run_query_command(args: &[OsString]) -> Result<(), String> {
         finalize_root(options).map_err(|error| format!("query {error}"))?;
     let service = LocalRepositoryService::open_with_scan_budget(root, scan_budget_bytes)
         .map_err(|_| "cannot secure project root".to_string())?;
-    let context = service
-        .context(&normalized, Some(&coordination), None)
+    let result = service
+        .context_result(&normalized, Some(&coordination), None)
         .map_err(|error| error.user_message().to_string())?;
-    let diagnostic = query_diagnostic(&context);
+    let context = result.model_text;
+    let diagnostic = result.diagnostics;
 
     if json_output {
         let value = serde_json::json!({
@@ -410,15 +385,9 @@ fn run_query_command(args: &[OsString]) -> Result<(), String> {
             "Sippion query diagnostics: bytes={} estimated_tokens={} hard_budget_bytes={} target_estimated_tokens={} scanned_bytes={} ranked_files={}",
             diagnostic.returned_bytes,
             diagnostic.estimated_tokens,
-            diagnostic
-                .hard_budget_bytes
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-            diagnostic
-                .target_estimated_tokens
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
-            diagnostic
-                .scanned_bytes
-                .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+            diagnostic.hard_budget_bytes,
+            diagnostic.target_estimated_tokens,
+            diagnostic.scanned_bytes,
             diagnostic
                 .ranked_files
                 .iter()
@@ -435,12 +404,16 @@ fn print_help() {
     println!("Usage: sippion mcp --root <project> [--scan-budget-mib 16..512]");
     println!("       sippion mcp --root-auto [--scan-budget-mib 16..512]");
     println!("       sippion query --root <project>|--root-auto [--json] [--explain] -- <q>");
+    println!("       sippion estimate-tokens [--json] < stdin");
     println!("       sippion inspect [--json]");
     println!("       sippion setup");
     println!("       sippion doctor [--json|--verbose]");
     println!("       sippion uninstall");
     println!(
         "  query runs the same bounded retrieval path as repo_context; diagnostics are opt-in."
+    );
+    println!(
+        "  estimate-tokens exposes the exact local soft-budget estimator used by the runtime and evaluation tooling."
     );
     println!("  inspect reports static local capabilities without reading repository source.");
     println!(

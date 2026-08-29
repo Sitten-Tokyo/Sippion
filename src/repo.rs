@@ -45,12 +45,15 @@ const ADAPTIVE_CONFIDENCE_STOP: f64 = 0.78;
 const MAX_ANALYSIS_CACHE_FILES: usize = 256;
 const MAX_GRAPH_CACHE_ENTRIES: usize = 64;
 const MAX_SESSION_MEMORY_RECORDS: usize = 128;
+/// Request-local source reuse is deliberately limited to small verified candidates. These snapshots
+/// never enter a RepositoryAccess field or cross-request cache and disappear with one repo_context
+/// call. Larger files keep the existing re-read path instead of increasing transient memory sharply.
+const MAX_REQUEST_SNAPSHOT_SOURCE_BYTES: usize = 512 * 1024;
 // Structural-map redaction must not amplify a bounded source file into a much larger retained
 // buffer. Bounded redaction also refuses to run the allocating per-line redactors over an
 // attacker-controlled giant/minified line; that line is suppressed instead.
 const MAX_REPOSITORY_MAP_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BOUNDED_REDACTION_LINE_BYTES: usize = 64 * 1024;
-const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";
 const REDACTED_MATCH_EXCERPT: &str = "[SIPPION_REDACTED_MATCH: matching source content suppressed]";
 
 pub const BUILTIN_PRUNED_DIRS: &[&str] = &[
@@ -182,6 +185,12 @@ pub struct SearchOutcome {
     adaptive_expandable: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct OptimizedSearchOutcome {
+    pub(crate) outcome: SearchOutcome,
+    pub(crate) snapshots: HashMap<String, Arc<str>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SourceStamp {
     len: u64,
@@ -283,6 +292,9 @@ struct VerifiedCandidate {
     document_len: usize,
     term_frequencies: Vec<usize>,
     evidence: VerifiedEvidence,
+    /// Optional request-local source snapshot for avoiding a second full read during structural
+    /// mapping. This is never stored in RepositoryAccess and is capped per file.
+    snapshot_source: Option<Arc<str>>,
 }
 
 #[derive(Debug, Default)]
@@ -389,6 +401,7 @@ pub struct RepositoryMapOutcome {
 #[derive(Debug, Clone)]
 struct MapCandidate {
     relative_path: String,
+    is_expansion: bool,
     stamp: SourceStamp,
     search_score: f64,
     source_lower: String,
@@ -415,9 +428,9 @@ pub struct RepositoryAccess {
     // Serialize those searches so one request cannot clear another request's in-progress index.
     #[cfg(windows)]
     windows_search_serial: Mutex<()>,
-    // The same metadata limitation applies to the structural analysis and graph caches. Serialize
-    // top-level map construction before discarding those cross-request caches on Windows so a
-    // same-size/same-mtime replacement can never reuse stale structural facts.
+    // Structural source is re-read on Windows and analysis/graph cache keys include a content
+    // fingerprint. Serialize top-level map construction so those verified caches can be reused
+    // across requests without stale same-size/same-mtime replacements racing one another.
     #[cfg(windows)]
     windows_map_serial: Mutex<()>,
     // File-level single-flight prevents concurrent cold-start queries from reading/indexing the
@@ -475,6 +488,7 @@ impl Drop for AnalysisFlightGuard<'_> {
 }
 
 mod access;
+mod adaptive;
 mod coordination;
 mod map;
 mod map_helpers;
@@ -487,6 +501,9 @@ use map_helpers::*;
 use policy::*;
 use ranking::*;
 use redaction::*;
+
+#[cfg(test)]
+use self::redaction::REDACTED_OVERSIZE_LINE;
 
 const SENSITIVE_LITERAL_KEYS: &[&str] = &[
     "password",

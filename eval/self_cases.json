@@ -1,0 +1,21 @@
+{
+  "minRecallAt5": 1.0,
+  "minMrr": 0.8,
+  "minExpectedPathRecallAt5": 1.0,
+  "minPackedExpectedPathRecall": 1.0,
+  "maxAverageEstimatedTokens": 1800,
+  "maxAverageUnnecessaryFileRatio": 0.9,
+  "maxP95LatencyMs": 5000,
+  "minAverageTokenSavings": 0.9,
+  "minRelevantPathsPer1kTokens": 0.35,
+  "cases": [
+    {"name":"context-budget","query":"ModelVisibleBudget MAX_CONTEXT_BUDGET MIN_CONTEXT_BUDGET","expectedPaths":["src/core.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"adaptive-retrieval","query":"MIN_CONFIDENCE_GAIN_FOR_EXPANSION MIN_NEW_HITS_PER_MIB efficiency_confidence","expectedPaths":["src/repo/adaptive.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"snapshot-map","query":"MAX_SEMANTIC_EXPANSION_FILES normalized_module_name map_from_hits_with_snapshots_since","expectedPaths":["src/repo/map.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"context-packer","query":"ContextAtom best_fitting_atom MAX_PACKED_ATOMS","expectedPaths":["src/service/context.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"mcp-cancellation","query":"InflightRequest InflightGuard try_commit_response","expectedPaths":["src/mcp.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"root-safety","query":"secure_explicit_root infer_project_root_from_cwd PROJECT_MARKERS","expectedPaths":["src/root.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"transactional-setup","query":"capture_setup_snapshots capture_snapshots restore_snapshots","expectedPaths":["src/setup.rs","src/managed.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400},
+    {"name":"secret-redaction","query":"REDACTED_OVERSIZE_LINE redact_high_confidence_secrets_with_limit PendingSensitiveValue","expectedPaths":["src/repo/redaction.rs"],"maxReturnedBytes":8192,"maxEstimatedTokens":2400}
+  ]
+}

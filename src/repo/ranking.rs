@@ -23,6 +23,7 @@ pub(super) fn upsert_repo_edge(
     }
 }
 
+#[cfg(test)]
 pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome) -> f64 {
     if outcome.hits.is_empty() {
         // A policy-excluded file is intentionally not adaptive-scan-expandable, but it still
@@ -475,6 +476,21 @@ pub(super) fn path_match_score(path: &str, terms: &[String]) -> usize {
         .count()
 }
 
+pub(super) fn coding_source_prior(path: &str) -> f64 {
+    // Sippion prepares context for coding tasks. Documentation remains searchable, but when
+    // lexical evidence is otherwise similar, implementation source should beat changelogs/history.
+    // Keep the prior smaller than two matched query terms so strong documentation evidence can
+    // still win when the user's query is actually documentation-oriented.
+    let extension = path.rsplit_once('.').map(|(_, extension)| extension);
+    match extension.map(str::to_ascii_lowercase).as_deref() {
+        Some(
+            "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "go" | "java" | "cs" | "c" | "h" | "cc"
+            | "cpp" | "cxx" | "hpp" | "hxx",
+        ) => 14.0,
+        _ => 0.0,
+    }
+}
+
 pub(super) fn hit_is_better(candidate: &SearchHit, current: &SearchHit) -> bool {
     candidate
         .score
@@ -518,4 +534,17 @@ pub(super) fn read_failure_makes_scan_incomplete(error: &RepositoryAccessError) 
             | RepositoryAccessError::ConcurrentModification
             | RepositoryAccessError::Io
     )
+}
+
+#[cfg(test)]
+mod coding_source_prior_tests {
+    use super::coding_source_prior;
+
+    #[test]
+    fn implementation_sources_get_a_small_coding_prior() {
+        assert!(
+            coding_source_prior("src/repo/map.rs") > coding_source_prior("docs/architecture.md")
+        );
+        assert_eq!(coding_source_prior("CHANGELOG.md"), 0.0);
+    }
 }

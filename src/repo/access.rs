@@ -383,25 +383,4 @@ impl RepositoryAccess {
         index.saturated = false;
         Ok(())
     }
-
-    #[cfg(windows)]
-    pub(super) fn reset_structural_caches(&self) -> Result<(), RepositoryAccessError> {
-        {
-            let mut analysis = self
-                .analysis_cache
-                .lock()
-                .map_err(|_| RepositoryAccessError::Io)?;
-            analysis.entries.clear();
-            analysis.tick = 0;
-        }
-        {
-            let mut graph = self
-                .graph_cache
-                .lock()
-                .map_err(|_| RepositoryAccessError::Io)?;
-            graph.entries.clear();
-            graph.tick = 0;
-        }
-        Ok(())
-    }
 }

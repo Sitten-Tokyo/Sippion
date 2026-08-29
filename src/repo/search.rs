@@ -32,6 +32,7 @@ impl RepositoryAccess {
         self.search_coordinated_since(query, max_results, cancellation, context, &started)
     }
 
+    #[cfg(test)]
     pub fn search_coordinated_since(
         &self,
         query: &NormalizedQuery,
@@ -65,9 +66,9 @@ impl RepositoryAccess {
         // Per-call cache for stable policy exclusions discovered only after reading (notably non-UTF-8).
         // This prevents adaptive rounds from repeatedly retrying the same deliberately excluded file.
         let mut policy_skips = HashMap::<String, SourceStamp>::new();
-        // Exact verification is cumulative within one adaptive search. Cache only derived evidence
-        // and identity, never full source bodies, so each additional round spends its byte grant on
-        // candidates that have not already been verified at the same file generation.
+        // Exact verification is cumulative within one adaptive search. Derived evidence and small
+        // verified source snapshots are request-local only; snapshots never enter RepositoryAccess
+        // state and exist solely to avoid a second full read during structural mapping.
         let mut verification_cache = HashMap::<String, VerifiedCandidate>::new();
 
         loop {
@@ -353,6 +354,7 @@ impl RepositoryAccess {
                 candidate.score =
                     (CONTENT_MATCH_BASE_SCORE + matched * 10 + candidate.path_bonus * 3) as f64
                         + bm25 * 12.0
+                        + coding_source_prior(&candidate.relative_path)
                         + memory_bonus;
             } else {
                 candidate.score = (candidate.path_bonus * 3) as f64 + memory_bonus.min(4.0);
@@ -502,6 +504,8 @@ impl RepositoryAccess {
             let (document_len, term_frequencies) = term_statistics(&source.text, terms);
             let has_content_match = term_frequencies.iter().any(|frequency| *frequency > 0);
             let fingerprint = source_content_fingerprint(&source.text);
+            let snapshot_source = (source.source_bytes <= MAX_REQUEST_SNAPSHOT_SOURCE_BYTES)
+                .then(|| Arc::<str>::from(source.text.as_str()));
             let mut evidence_scan_complete = true;
             let evidence = if !has_content_match {
                 VerifiedEvidence::None
@@ -579,6 +583,7 @@ impl RepositoryAccess {
                 document_len,
                 term_frequencies,
                 evidence,
+                snapshot_source,
             };
             if let Some(hit) = self.hit_from_verified_candidate(
                 &candidate,
@@ -725,6 +730,7 @@ impl RepositoryAccess {
                     + candidate.path_bonus * 3) as f64
                     + bm25 * 12.0
                     + *structure_bonus
+                    + coding_source_prior(&candidate.relative_path)
                     + memory_bonus,
                 source_stamp: Some(verified.stamp.clone()),
                 source_fingerprint: Some(verified.fingerprint),
@@ -736,6 +742,7 @@ impl RepositoryAccess {
                 excerpt: REDACTED_MATCH_EXCERPT.to_string(),
                 score: (CONTENT_MATCH_BASE_SCORE + matched * 10 + candidate.path_bonus * 3) as f64
                     + bm25 * 12.0
+                    + coding_source_prior(&candidate.relative_path)
                     + memory_bonus,
                 source_stamp: Some(verified.stamp.clone()),
                 source_fingerprint: Some(verified.fingerprint),

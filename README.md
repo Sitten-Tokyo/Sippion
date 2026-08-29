@@ -3,7 +3,10 @@
 **English** | [日本語](README.ja.md)
 
 Sippion is a local, read-only MCP server that helps AI coding agents find the
-right parts of a repository before they start opening source files broadly.
+right parts of a repository before they start opening source files broadly. Its primary
+job is to organize and bound repository context **before it is passed to an AI model**, so
+clients avoid spending model-input tokens on irrelevant source while preserving the
+evidence needed to solve the task.
 
 Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,
 structural context, and source-only semantic ranking to return a small,
@@ -208,12 +211,14 @@ sippion mcp --root /ABSOLUTE/PATH/TO/PROJECT --scan-budget-mib 128
 
 ## How it works
 
-Retrieval starts with a RAM-only lexical index, parses only ranked candidates,
-adds bounded source-only semantic evidence, and packs verified excerpts into a
-bounded response. Structural parsing currently covers Rust, Python,
-JavaScript/TypeScript, Go, Java, C#, C, and C++. Search-term matching is
-Unicode-aware while filesystem safety policy remains deliberately separate and
-conservative.
+Retrieval starts with a RAM-only lexical index, expands scan work only while the
+previous round is still yielding useful evidence, parses ranked candidates, and can add a
+bounded set of deterministic import/semantic neighbors. Verified excerpts and structural
+facts are then selected by utility per estimated token, with redundant same-file context
+discounted. The estimated-token target is a soft packing goal; an independent byte cap is
+the hard model-visible output guard. Structural parsing currently covers Rust, Python,
+JavaScript/TypeScript, Go, Java, C#, C, and C++. Search-term matching is Unicode-aware
+while filesystem safety policy remains deliberately separate and conservative.
 
 Sippion is a repository-context tool, not a compiler or language server. It
 does not claim compiler-authoritative type resolution or LSP-grade references.
