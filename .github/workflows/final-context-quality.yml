@@ -21,19 +21,32 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Apply final context quality changes
+      - name: Move redaction sentinel to its implementation owner
+        shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/apply-final-context-quality.py
-          python3 .github/scripts/apply-symbol-fallback.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('src/service/context.rs')
-          text = path.read_text(encoding='utf-8')
-          old = '.copied().unwrap_or_else(|| {'
-          if text.count(old) != 1:
-              raise SystemExit(f'clippy fallback rewrite: expected one match, got {text.count(old)}')
-          path.write_text(text.replace(old, '.copied().unwrap_or({', 1), encoding='utf-8')
+
+          repo_path = Path('src/repo.rs')
+          repo = repo_path.read_text(encoding='utf-8')
+          old_parent = 'const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";\n'
+          parent_import = 'use self::redaction::REDACTED_OVERSIZE_LINE;\n'
+          if old_parent in repo:
+              repo = repo.replace(old_parent, parent_import, 1)
+          elif parent_import not in repo:
+              raise SystemExit('repo.rs redaction sentinel ownership shape is unexpected')
+          repo_path.write_text(repo, encoding='utf-8')
+
+          redaction_path = Path('src/repo/redaction.rs')
+          redaction = redaction_path.read_text(encoding='utf-8')
+          local = 'pub(super) const REDACTED_OVERSIZE_LINE: &str = "[SIPPION_REDACTED_OVERSIZE_LINE]";\n'
+          if local not in redaction:
+              marker = 'use super::*;\n'
+              if redaction.count(marker) != 1:
+                  raise SystemExit(f'redaction.rs import marker count: {redaction.count(marker)}')
+              redaction = redaction.replace(marker, marker + '\n' + local, 1)
+          redaction_path.write_text(redaction, encoding='utf-8')
           PY
 
       - name: Validate Rust and Python
@@ -108,13 +121,19 @@ jobs:
           assert any(item['name'].startswith('pair:') for item in payload['candidates'])
           PY
 
-      - name: Commit validated changes and remove helpers
+      - name: Commit validated fix and remove temporary helpers
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/core.rs src/hybrid.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs src/repo/redaction.rs docs/architecture.md CHANGELOG.md
-          git rm -f .github/scripts/final-context-quality.py .github/scripts/apply-final-context-quality.py .github/scripts/apply-symbol-fallback.py .github/workflows/final-context-quality.yml .github/workflows/debug-source-prior.yml
-          git commit -m "Strengthen context evaluation and diagnostics"
+          git add src/repo.rs src/repo/redaction.rs
+          git rm -f --ignore-unmatch \
+            .github/scripts/final-context-quality.py \
+            .github/scripts/apply-final-context-quality.py \
+            .github/scripts/apply-symbol-fallback.py \
+            .github/workflows/final-context-quality.yml \
+            .github/workflows/debug-source-prior.yml
+          git diff --cached --check
+          git commit -m "Own redaction sentinel in redaction module"
           git push origin HEAD:feature/context-efficiency-overhaul
