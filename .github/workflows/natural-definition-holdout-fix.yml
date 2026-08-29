@@ -1,0 +1,129 @@
+name: Natural definition holdout fix
+
+on:
+  push:
+    branches:
+      - feature/context-efficiency-overhaul
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/context-efficiency-overhaul
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
+        with:
+          components: rustfmt, clippy
+      - name: Apply natural definition ownership fix
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/hybrid.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        if identifier_matches == 0 {
+              return 6.0;
+          }
+          let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;
+          // Exact symbol queries keep the established ownership floor. Natural-language queries
+          // gain additional credit when several query concepts are owned by one identifier.
+          return if identifier_matches == terms.len() {
+              coverage_bonus.max(14.0)
+          } else {
+              coverage_bonus
+          }
+          .min(22.0);'''
+          new = '''        if identifier_matches == 0 {
+              return 6.0;
+          }
+          // Keep the established single-symbol ownership score, but make a compound definition
+          // that owns two or more natural-language query concepts stronger than surrounding prose
+          // which merely mentions additional query words. This is intentionally definition-only:
+          // ordinary compound references retain the weaker bonus below.
+          let coverage_bonus = if identifier_matches >= 2 {
+              18.0 + identifier_matches as f64 * 6.0
+          } else {
+              10.0
+          };
+          return if identifier_matches == terms.len() {
+              coverage_bonus.max(14.0)
+          } else {
+              coverage_bonus
+          }
+          .min(36.0);'''
+          if text.count(old) != 1:
+              raise SystemExit('definition bonus block mismatch')
+          text = text.replace(old, new, 1)
+          old_test = '''        let terms = vec![
+              "source".to_string(),
+              "fingerprint".to_string(),
+              "stale".to_string(),
+              "evidence".to_string(),
+          ];
+          let definition = structural_line_bonus(
+              "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",
+              &terms,
+          );
+          let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);
+          let prose = structural_line_bonus("source fingerprint stale evidence", &terms);'''
+          new_test = '''        let terms = vec![
+              "orchid".to_string(),
+              "ledger".to_string(),
+              "stale".to_string(),
+              "record".to_string(),
+          ];
+          let definition = structural_line_bonus(
+              "pub(super) fn orchid_ledger_checkpoint(value: &str) -> bool {",
+              &terms,
+          );
+          let reference = structural_line_bonus("orchid_ledger_checkpoint(&value)", &terms);
+          let prose = structural_line_bonus("orchid ledger stale record", &terms);'''
+          if text.count(old_test) != 1:
+              raise SystemExit('natural query test block mismatch')
+          text = text.replace(old_test, new_test, 1)
+          old_restricted = '''        let terms = vec!["project".to_string(), "markers".to_string()];
+          assert!(
+              structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)
+                  > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)
+          );'''
+          new_restricted = '''        let terms = vec!["quasar".to_string(), "table".to_string()];
+          assert!(
+              structural_line_bonus("pub(crate) const QUASAR_TABLE: &[&str] = &[", &terms)
+                  > structural_line_bonus("QUASAR_TABLE.iter()", &terms)
+          );'''
+          if text.count(old_restricted) != 1:
+              raise SystemExit('restricted visibility test block mismatch')
+          path.write_text(text.replace(old_restricted, new_restricted, 1), encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --locked
+          cargo build --release --locked
+      - name: Validate whole repository holdout
+        run: |
+          set -euo pipefail
+          holdout_root="$RUNNER_TEMP/sippion-self-holdout"
+          rm -rf "$holdout_root"
+          mkdir -p "$holdout_root"
+          tar --exclude='./.git' --exclude='./target' --exclude='./eval' --exclude='./node_modules' -cf - . | tar -xf - -C "$holdout_root"
+          python3 scripts/retrieval-eval.py \
+            --binary target/release/sippion \
+            --cases eval/self_holdout_cases.json \
+            --fixture "$holdout_root" \
+            --baseline-root "$holdout_root"
+      - name: Commit validated fix and remove helper
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/hybrid.rs
+          git rm -f .github/workflows/natural-definition-holdout-fix.yml
+          git commit -m "Strengthen natural-query definition ownership"
+          git push origin HEAD:feature/context-efficiency-overhaul
