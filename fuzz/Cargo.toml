@@ -18,5 +18,33 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "redaction"
+path = "fuzz_targets/redaction.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "root_scope"
+path = "fuzz_targets/root_scope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_stdio"
+path = "fuzz_targets/mcp_stdio.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_parser"
+path = "fuzz_targets/source_parser.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]
