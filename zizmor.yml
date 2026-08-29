@@ -6,23 +6,23 @@ rules:
       # This privileged workflow_run is evaluated from the default branch, never checks out PR
       # contents, accepts only one same-repository PR by the trusted author, validates the exact
       # head SHA and tested base/head artifact, and rechecks main immediately before exact-head merge.
-      - ".github/workflows/author-auto-merge.yml:6"
+      - "author-auto-merge.yml:6"
       # Registry publication consumes only a successful trusted release workflow or an explicit
       # manual tag dispatch, then independently validates the release/tag path before publishing.
-      - ".github/workflows/mcp-registry-publish.yml:3"
+      - "mcp-registry-publish.yml:3"
       # The workflow_run branch is limited to the trusted draft-release workflow; PR execution uses
       # the separate pull_request branch and does not inherit privileged workflow_run behavior.
-      - ".github/workflows/release-supply-chain-smoke.yml:3"
+      - "release-supply-chain-smoke.yml:3"
 
   cache-poisoning:
     ignore:
       # The pinned setup-node action only enables dependency caching when its `cache` input is set;
       # this release step intentionally leaves that input unset.
-      - ".github/workflows/release-draft.yml:133"
-      - ".github/workflows/release-supply-chain-smoke.yml:64"
+      - "release-draft.yml:133"
+      - "release-supply-chain-smoke.yml:64"
 
   adhoc-packages:
     ignore:
       # Protocol conformance intentionally installs one exact MCP client version with lifecycle
       # scripts disabled. It is test-only and cannot influence release artifacts.
-      - ".github/workflows/ci.yml:138"
+      - "ci.yml:138"
