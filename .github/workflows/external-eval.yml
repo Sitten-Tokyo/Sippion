@@ -1,0 +1,53 @@
+name: External retrieval evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'eval/external_repos.json'
+      - 'scripts/external-retrieval-eval.py'
+      - '.github/workflows/external-eval.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '43 3 * * 2,5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Sippion
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate evaluation tooling syntax and manifest JSON
+        run: |
+          python3 -m py_compile scripts/external-retrieval-eval.py
+          python3 -m json.tool eval/external_repos.json >/dev/null
+
+  holdout:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out Sippion
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Evaluate pinned external repositories
+        env:
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_TERMINAL_PROMPT: '0'
+        run: python3 scripts/external-retrieval-eval.py --binary target/release/sippion

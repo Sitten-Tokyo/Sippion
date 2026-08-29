@@ -1,0 +1,48 @@
+name: Fuzz
+
+on:
+  pull_request:
+    paths:
+      - 'src/core.rs'
+      - 'src/lib.rs'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  query-normalization:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned nightly Rust
+        run: rustup toolchain install nightly-2026-08-29 --profile minimal --no-self-update
+
+      - name: Install pinned cargo-fuzz
+        run: cargo +nightly-2026-08-29 install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Build fuzz target
+        run: cargo +nightly-2026-08-29 fuzz build query_normalize
+
+      - name: Fuzz query normalization on pull requests
+        if: github.event_name == 'pull_request'
+        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=30 -timeout=10
+
+      - name: Fuzz query normalization on schedule or demand
+        if: github.event_name != 'pull_request'
+        run: cargo +nightly-2026-08-29 fuzz run query_normalize -- -max_total_time=180 -timeout=10

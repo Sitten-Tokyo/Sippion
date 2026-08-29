@@ -13,7 +13,7 @@ Changes must preserve these defaults unless the pull request explicitly proposes
 - source text is untrusted data and high-confidence secrets are redacted before model output;
 - persistent repository indexes or cross-process source caches are not introduced implicitly.
 
-See `docs/security.md`, `docs/architecture.md`, and `docs/integrations.md` before changing retrieval or trust-boundary code.
+See `docs/security.md`, `docs/architecture.md`, `docs/integrations.md`, and `docs/quality.md` before changing retrieval or trust-boundary code.
 
 ## Development environment
 
@@ -33,6 +33,8 @@ Dependency changes must also pass the repository RustSec and `cargo-deny` policy
 Tree-sitter and semantic extraction run only on already-ranked candidates and are subject to explicit time/node budgets. New language support should include extension-to-grammar mapping, declaration tests, safe semantic/import evidence, bounded pathological-input behavior, and no compiler/LSP/repository-code execution.
 
 Heuristic or semantic evidence must not be described as compiler-authoritative.
+
+Retrieval changes should preserve the committed fixture/self-hosted gates and should also be checked against the pinned external OSS holdout when they materially change ranking, parsing, semantic expansion, or packing. Query-input changes should update deterministic property tests and the relevant fuzz target. Performance-sensitive changes should inspect the base/head comparison instead of relying on a single absolute CI duration. See `docs/quality.md` for the commands and workflow boundaries.
 
 ## Pull requests
 
