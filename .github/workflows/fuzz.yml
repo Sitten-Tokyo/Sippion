@@ -1,6 +1,14 @@
 name: Fuzz
 
 on:
+  pull_request:
+    paths:
+      - 'src/core.rs'
+      - 'src/lib.rs'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 4 * * *'
@@ -33,5 +41,10 @@ jobs:
       - name: Build fuzz target
         run: cargo fuzz build query_normalize
 
-      - name: Fuzz query normalization
+      - name: Fuzz query normalization on pull requests
+        if: github.event_name == 'pull_request'
+        run: cargo fuzz run query_normalize -- -max_total_time=30 -timeout=10
+
+      - name: Fuzz query normalization on schedule or demand
+        if: github.event_name != 'pull_request'
         run: cargo fuzz run query_normalize -- -max_total_time=180 -timeout=10
