@@ -439,10 +439,8 @@ mod tests {
             "res".to_string(),
             "callback".to_string(),
         ];
-        let definition = structural_line_bonus(
-            "app.handle = function handle(req, res, callback) {",
-            &terms,
-        );
+        let definition =
+            structural_line_bonus("app.handle = function handle(req, res, callback) {", &terms);
         let call = structural_line_bonus("app.handle(req, res, callback);", &terms);
         assert!(definition > call);
         assert!(definition >= 50.0);
