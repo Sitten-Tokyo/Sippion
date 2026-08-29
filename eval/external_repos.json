@@ -27,7 +27,7 @@
       "cases": [
         {
           "name": "python-flask-app",
-          "query": "Flask application request",
+          "query": "Flask full_dispatch_request dispatch_request make_response",
           "expectedPaths": ["src/flask/app.py"],
           "requiredAnchors": ["class Flask"]
         }
@@ -42,7 +42,7 @@
       "cases": [
         {
           "name": "javascript-express-handle",
-          "query": "app handle router callback",
+          "query": "app.handle handle req res callback",
           "expectedPaths": ["lib/application.js"],
           "requiredAnchors": ["app.handle"]
         }
@@ -57,7 +57,7 @@
       "cases": [
         {
           "name": "typescript-source-file-cache",
-          "query": "SourceFileCache snapshot project",
+          "query": "SourceFileCache getRetained retainForSnapshot releaseSnapshot",
           "expectedPaths": ["packages/typescript/src/api/sourceFileCache.ts"],
           "requiredAnchors": ["export class SourceFileCache"]
         }
@@ -72,7 +72,7 @@
       "cases": [
         {
           "name": "go-cobra-command",
-          "query": "Command application flags",
+          "query": "Command execute flags args subcommands",
           "expectedPaths": ["command.go"],
           "requiredAnchors": ["type Command struct"]
         }
@@ -102,7 +102,7 @@
       "cases": [
         {
           "name": "csharp-command-symbol",
-          "query": "Command Symbol Subcommands",
+          "query": "Command TreatUnmatchedTokensAsErrors Subcommands",
           "expectedPaths": ["src/System.CommandLine/Command.cs"],
           "requiredAnchors": ["public class Command"]
         }
