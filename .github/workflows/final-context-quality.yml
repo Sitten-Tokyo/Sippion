@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/core.rs src/hybrid.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs docs/architecture.md CHANGELOG.md
+          git add src/core.rs src/hybrid.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs src/repo/redaction.rs docs/architecture.md CHANGELOG.md
           git rm -f .github/scripts/final-context-quality.py .github/scripts/apply-final-context-quality.py .github/scripts/apply-symbol-fallback.py .github/workflows/final-context-quality.yml .github/workflows/debug-source-prior.yml
           git commit -m "Strengthen context evaluation and diagnostics"
           git push origin HEAD:feature/context-efficiency-overhaul
