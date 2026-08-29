@@ -263,8 +263,8 @@ fn pack_context_with_weights(
     let mut selected_paths = HashSet::new();
     let mut order = Vec::new();
 
-    // Preserve at least the strongest code evidence when one exists. The remaining budget is
-    // filled by marginal utility per estimated token, with same-path atoms discounted for novelty.
+    // Preserve the strongest code evidence when one exists. The remaining budget is filled by
+    // marginal utility per estimated token, with same-path atoms discounted for novelty.
     if let Some((index, atom)) = atoms
         .iter()
         .enumerate()
@@ -283,6 +283,26 @@ fn pack_context_with_weights(
         remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);
         remaining_bytes = remaining_bytes.saturating_sub(atom.text.len());
         order.push(index);
+    }
+
+    // Also preserve the highest-ranked remaining retrieval evidence when it fits. Evidence atoms
+    // are appended in retrieval-rank order, so the first unselected one is the best-ranked path
+    // not already covered by the strongest-utility reservation. Keeping two distinct source
+    // excerpts prevents definition-heavy structure atoms from crowding out the runner-up exact
+    // implementation evidence while retaining the same token, byte, and atom budgets.
+    if order.len() < MAX_PACKED_ATOMS {
+        if let Some((index, atom)) = atoms.iter().enumerate().find(|(index, atom)| {
+            !selected.contains(index)
+                && atom.kind == ContextAtomKind::Evidence
+                && atom.token_cost <= remaining_tokens
+                && atom.text.len() <= remaining_bytes
+        }) {
+            selected.insert(index);
+            selected_paths.insert(atom.path.clone());
+            remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);
+            remaining_bytes = remaining_bytes.saturating_sub(atom.text.len());
+            order.push(index);
+        }
     }
 
     // Preserve query-relevant definition/signature structures when they fit. This keeps compact
@@ -432,6 +452,50 @@ mod tests {
             packed.packed_paths.first().map(String::as_str),
             Some("src/auth.rs")
         );
+    }
+
+    #[test]
+    fn packer_reserves_runner_up_retrieval_evidence_before_structure_saturation() {
+        let entries = (0..10)
+            .map(|index| RepoMapEntry {
+                relative_path: format!("src/definition_{index}.rs"),
+                score: 1_000.0 - index as f64,
+                symbols: vec![RepoMapSymbol {
+                    name: format!("authentication_token_{index}"),
+                    kind: "function".into(),
+                    line: 1,
+                    signature: format!("fn authentication_token_{index}()"),
+                }],
+                links_to: Vec::new(),
+                semantic_links: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let excerpts = vec![
+            RenderExcerpt {
+                path: "src/top.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                body: "fn authentication_token() {}\n".into(),
+                score: 100.0,
+            },
+            RenderExcerpt {
+                path: "src/runner_up.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                body: "const SECOND_RANK_EVIDENCE_MARKER: &str = \"kept\";\n".into(),
+                score: 10.0,
+            },
+        ];
+        let coverage = SearchCoverage {
+            discovery_complete: true,
+            eligible_files: entries.len() + excerpts.len(),
+            indexed_files: entries.len() + excerpts.len(),
+            confidence_milli: 900,
+            ..SearchCoverage::default()
+        };
+        let packed = pack_context(&query(), &entries, &excerpts, "", &coverage);
+        assert!(packed.text.contains("SECOND_RANK_EVIDENCE_MARKER"));
+        assert!(packed.text.len() <= packed.hard_budget_bytes);
     }
 
     #[test]
