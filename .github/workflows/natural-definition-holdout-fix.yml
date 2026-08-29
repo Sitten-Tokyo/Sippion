@@ -25,81 +25,53 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('src/hybrid.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        if identifier_matches == 0 {
-              return 6.0;
-          }
-          let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;
-          // Exact symbol queries keep the established ownership floor. Natural-language queries
-          // gain additional credit when several query concepts are owned by one identifier.
-          return if identifier_matches == terms.len() {
-              coverage_bonus.max(14.0)
-          } else {
-              coverage_bonus
-          }
-          .min(22.0);'''.replace('          ', '        ')
-          new = '''        if identifier_matches == 0 {
-              return 6.0;
-          }
-          // Keep the established single-symbol ownership score, but make a compound definition
-          // that owns two or more natural-language query concepts stronger than surrounding prose
-          // which merely mentions additional query words. This is intentionally definition-only:
-          // ordinary compound references retain the weaker bonus below.
+
+          old_line = '        let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;'
+          new_lines = '''        // Keep the established single-symbol ownership score, but make a compound definition
+          // that owns two or more natural-language query concepts stronger than surrounding prose.
+          // This is definition-only; ordinary compound references retain the weaker bonus below.
           let coverage_bonus = if identifier_matches >= 2 {
               18.0 + identifier_matches as f64 * 6.0
           } else {
               10.0
-          };
-          return if identifier_matches == terms.len() {
-              coverage_bonus.max(14.0)
-          } else {
-              coverage_bonus
-          }
-          .min(36.0);'''.replace('          ', '        ')
-          if text.count(old) != 1:
-              raise SystemExit('definition bonus block mismatch')
-          text = text.replace(old, new, 1)
-          old_test = '''        let terms = vec![
-              "source".to_string(),
-              "fingerprint".to_string(),
-              "stale".to_string(),
-              "evidence".to_string(),
-          ];
-          let definition = structural_line_bonus(
-              "pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {",
-              &terms,
-          );
-          let reference = structural_line_bonus("source_content_fingerprint(&text)", &terms);
-          let prose = structural_line_bonus("source fingerprint stale evidence", &terms);'''.replace('          ', '        ')
-          new_test = '''        let terms = vec![
-              "orchid".to_string(),
-              "ledger".to_string(),
-              "stale".to_string(),
-              "record".to_string(),
-          ];
-          let definition = structural_line_bonus(
-              "pub(super) fn orchid_ledger_checkpoint(value: &str) -> bool {",
-              &terms,
-          );
-          let reference = structural_line_bonus("orchid_ledger_checkpoint(&value)", &terms);
-          let prose = structural_line_bonus("orchid ledger stale record", &terms);'''.replace('          ', '        ')
-          if text.count(old_test) != 1:
-              raise SystemExit('natural query test block mismatch')
-          text = text.replace(old_test, new_test, 1)
-          old_restricted = '''        let terms = vec!["project".to_string(), "markers".to_string()];
-          assert!(
-              structural_line_bonus("pub(crate) const PROJECT_MARKERS: &[&str] = &[", &terms)
-                  > structural_line_bonus("PROJECT_MARKERS.iter()", &terms)
-          );'''.replace('          ', '        ')
-          new_restricted = '''        let terms = vec!["quasar".to_string(), "table".to_string()];
-          assert!(
-              structural_line_bonus("pub(crate) const QUASAR_TABLE: &[&str] = &[", &terms)
-                  > structural_line_bonus("QUASAR_TABLE.iter()", &terms)
-          );'''.replace('          ', '        ')
-          if text.count(old_restricted) != 1:
-              raise SystemExit('restricted visibility test block mismatch')
-          path.write_text(text.replace(old_restricted, new_restricted, 1), encoding='utf-8')
+          };'''
+          if text.count(old_line) != 1:
+              raise SystemExit('definition bonus line mismatch')
+          text = text.replace(old_line, new_lines, 1)
+          if text.count('.min(22.0);') != 1:
+              raise SystemExit('definition bonus cap mismatch')
+          text = text.replace('.min(22.0);', '.min(36.0);', 1)
+
+          def rewrite_test(source, fn_name, replacements):
+              marker = f'    fn {fn_name}() {{'
+              start = source.index(marker)
+              next_test = source.find('    #[test]', start + len(marker))
+              end = len(source) if next_test < 0 else next_test
+              segment = source[start:end]
+              for old, new in replacements:
+                  if old not in segment:
+                      raise SystemExit(f'{fn_name}: missing {old!r}')
+                  segment = segment.replace(old, new)
+              return source[:start] + segment + source[end:]
+
+          text = rewrite_test(text, 'natural_query_rewards_partial_identifier_ownership_and_references', [
+              ('"source".to_string()', '"orchid".to_string()'),
+              ('"fingerprint".to_string()', '"ledger".to_string()'),
+              ('"evidence".to_string()', '"record".to_string()'),
+              ('source_content_fingerprint', 'orchid_ledger_checkpoint'),
+              ('text: &str', 'value: &str'),
+              ('(&text)', '(&value)'),
+              ('source fingerprint stale evidence', 'orchid ledger stale record'),
+          ])
+          text = rewrite_test(text, 'restricted_rust_visibility_is_treated_as_definition_ownership', [
+              ('"project".to_string()', '"quasar".to_string()'),
+              ('"markers".to_string()', '"table".to_string()'),
+              ('PROJECT_MARKERS', 'QUASAR_TABLE'),
+          ])
+          path.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all
           cargo fmt --all -- --check
