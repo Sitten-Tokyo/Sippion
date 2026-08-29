@@ -6,6 +6,7 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 
 ### Changed
 
+- Context packing now uses identifier-component-aware structure reservation and exposes typed CLI-only atom selection diagnostics; evaluation scopes required evidence to its owning path/atom, uses warmup-plus-median latency measurements, compares an independent BM25 baseline, expands the frozen whole-repository holdout suite, and explores pairwise train-only tuner candidates before one post-selection holdout. Graph cache identity now includes the exact redacted-source fingerprint so case-only rewrites invalidate safely on Windows.
 - Repository context packing now explicitly optimizes utility per estimated model-input token, discounts redundant same-file atoms, and exposes typed retrieval/packing diagnostics without reparsing model-visible text.
 - Context packing now reserves one query-relevant definition/signature structure atom within the existing token and atom budgets, preventing high-value symbol ownership from being displaced by prose-heavy context.
 - Model-visible source evidence is line-framed as untrusted data so repository text cannot masquerade as top-level compact `CTX`, `S`, or `E` records.
