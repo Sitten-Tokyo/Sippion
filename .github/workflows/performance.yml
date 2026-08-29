@@ -8,6 +8,7 @@ on:
       - 'Cargo.lock'
       - 'eval/**'
       - 'scripts/perf-regression.py'
+      - 'scripts/warm-mcp-regression.py'
       - '.github/workflows/performance.yml'
   workflow_dispatch:
 
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   compare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Check out candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,13 +47,33 @@ jobs:
         run: cargo build --release --locked --manifest-path candidate/Cargo.toml
 
       - name: Validate benchmark tooling syntax
-        run: python3 -m py_compile candidate/scripts/perf-regression.py
+        run: python3 -m py_compile candidate/scripts/perf-regression.py candidate/scripts/warm-mcp-regression.py
 
-      - name: Compare candidate against baseline
+      - name: Compare cold CLI performance
         run: |
           python3 candidate/scripts/perf-regression.py \
             --baseline baseline/target/release/sippion \
             --candidate candidate/target/release/sippion \
             --fixture candidate/eval/fixture \
             --cases candidate/eval/cases.json \
-            --repetitions 2
+            --repetitions 2 \
+            --output candidate/perf-results/cold.json
+
+      - name: Compare warm long-lived MCP performance
+        run: |
+          python3 candidate/scripts/warm-mcp-regression.py \
+            --baseline baseline/target/release/sippion \
+            --candidate candidate/target/release/sippion \
+            --fixture candidate/eval/fixture \
+            --cases candidate/eval/cases.json \
+            --max-queries 8 \
+            --output candidate/perf-results/warm-mcp.json
+
+      - name: Upload performance comparison reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: performance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate/perf-results/*.json
+          if-no-files-found: warn
+          retention-days: 30
