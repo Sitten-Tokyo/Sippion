@@ -1,0 +1,110 @@
+name: Tooling static analysis
+
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'scripts/*.sh'
+      - 'scripts/*.ps1'
+      - '.shellcheckrc'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/**'
+      - 'scripts/*.sh'
+      - 'scripts/*.ps1'
+      - '.shellcheckrc'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tooling-static-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-and-actions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz'
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error "$url" -o shellcheck.tar.xz
+          printf '%s  %s\n' '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' shellcheck.tar.xz | sha256sum --check --strict
+          tar -xJf shellcheck.tar.xz
+          install -m 0755 shellcheck-v0.11.0/shellcheck "$RUNNER_TEMP/shellcheck"
+          "$RUNNER_TEMP/shellcheck" --version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Analyze Unix installers
+        run: |
+          "$RUNNER_TEMP/shellcheck" --external-sources scripts/bootstrap.sh scripts/install.sh
+
+      - name: Install checksum-pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz'
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error "$url" -o actionlint.tar.gz
+          printf '%s  %s\n' '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8' actionlint.tar.gz | sha256sum --check --strict
+          tar -xzf actionlint.tar.gz
+          install -m 0755 actionlint "$RUNNER_TEMP/actionlint"
+          "$RUNNER_TEMP/actionlint" -version
+
+      - name: Lint GitHub Actions syntax and expressions
+        run: |
+          "$RUNNER_TEMP/actionlint" -shellcheck=
+
+      - name: Install checksum-pinned zizmor
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/zizmorcore/zizmor/releases/download/v1.29.0/zizmor-x86_64-unknown-linux-gnu.tar.gz'
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error "$url" -o zizmor.tar.gz
+          printf '%s  %s\n' 'dd96df044a6e8538d5f423790f453bdd03d49e5b2bcc38214acc41a2f1297839' zizmor.tar.gz | sha256sum --check --strict
+          tar -xzf zizmor.tar.gz
+          install -m 0755 zizmor "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor" --version
+
+      - name: Audit GitHub Actions security
+        run: |
+          "$RUNNER_TEMP/zizmor" --strict-collection --collect=workflows,actions .
+
+  powershell:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install exact PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          $installed = Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -eq '1.25.0'
+          if (-not $installed) { throw 'PSScriptAnalyzer 1.25.0 was not installed' }
+
+      - name: Analyze PowerShell installers
+        shell: pwsh
+        run: |
+          $findings = @()
+          foreach ($path in @('scripts/bootstrap.ps1', 'scripts/install.ps1')) {
+            $findings += Invoke-ScriptAnalyzer -Path $path -Severity Error,Warning
+          }
+          if ($findings.Count -ne 0) {
+            $findings | Format-Table -AutoSize | Out-String | Write-Error
+            exit 1
+          }

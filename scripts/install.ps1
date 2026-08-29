@@ -111,7 +111,7 @@ try {
     }
 
     if ($verifyOnly) {
-        Write-Host "Verified Sippion release artifact $artifact."
+        Write-Information "Verified Sippion release artifact $artifact." -InformationAction Continue
         return
     }
 
@@ -137,9 +137,9 @@ try {
     $entries = @($userPath -split ";" | Where-Object { $_ })
     if ($entries -notcontains $installDir) {
         [Environment]::SetEnvironmentVariable("Path", (($entries + $installDir) -join ";"), "User")
-        Write-Host "Added $installDir to the user PATH. Open a new terminal to use sippion directly."
+        Write-Information "Added $installDir to the user PATH. Open a new terminal to use sippion directly." -InformationAction Continue
     }
-    Write-Host "Installed Sippion at $installPath"
+    Write-Information "Installed Sippion at $installPath" -InformationAction Continue
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {

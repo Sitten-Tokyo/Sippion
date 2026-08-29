@@ -8,7 +8,11 @@ on:
       - 'Cargo.lock'
       - 'eval/**'
       - 'scripts/perf-regression.py'
+      - 'scripts/mcp-perf-regression.py'
       - '.github/workflows/performance.yml'
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -21,7 +25,7 @@ concurrency:
 jobs:
   compare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Check out candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,7 +36,7 @@ jobs:
       - name: Check out baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha || 'main' }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.before || 'main' }}
           path: baseline
           persist-credentials: false
 
@@ -46,13 +50,33 @@ jobs:
         run: cargo build --release --locked --manifest-path candidate/Cargo.toml
 
       - name: Validate benchmark tooling syntax
-        run: python3 -m py_compile candidate/scripts/perf-regression.py
+        run: python3 -m py_compile candidate/scripts/perf-regression.py candidate/scripts/mcp-perf-regression.py
 
-      - name: Compare candidate against baseline
+      - name: Compare cold process performance
         run: |
           python3 candidate/scripts/perf-regression.py \
             --baseline baseline/target/release/sippion \
             --candidate candidate/target/release/sippion \
             --fixture candidate/eval/fixture \
             --cases candidate/eval/cases.json \
-            --repetitions 2
+            --repetitions 2 \
+            --output performance-results/cold.json
+
+      - name: Compare warm MCP performance
+        run: |
+          python3 candidate/scripts/mcp-perf-regression.py \
+            --baseline baseline/target/release/sippion \
+            --candidate candidate/target/release/sippion \
+            --fixture candidate/eval/fixture \
+            --cases candidate/eval/cases.json \
+            --repetitions 4 \
+            --output performance-results/warm-mcp.json
+
+      - name: Upload performance history
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: performance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: performance-results/*.json
+          if-no-files-found: warn
+          retention-days: 90

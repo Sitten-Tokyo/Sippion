@@ -54,6 +54,84 @@
           "requiredAnchors": ["type Command struct"]
         }
       ]
+    },
+    {
+      "name": "zod",
+      "url": "https://github.com/colinhacks/zod.git",
+      "commit": "e8e206fa33ac5fe7ce20a2beb12d57b1cb3df653",
+      "cases": [
+        {
+          "name": "typescript-zod-type",
+          "query": "ZodType parse safeParse schema",
+          "expectedPaths": ["packages/zod/src/v4/classic/schemas.ts"],
+          "requiredAnchors": ["export interface ZodType<"]
+        }
+      ]
+    },
+    {
+      "name": "commons-lang",
+      "url": "https://github.com/apache/commons-lang.git",
+      "commit": "620f4ff4b4b0934e6dc46465fe5c92fd7e1fb997",
+      "cases": [
+        {
+          "name": "java-string-utils",
+          "query": "StringUtils null safe string operations",
+          "expectedPaths": ["src/main/java/org/apache/commons/lang3/StringUtils.java"],
+          "requiredAnchors": ["public class StringUtils"]
+        }
+      ]
+    },
+    {
+      "name": "spectre-console",
+      "url": "https://github.com/spectreconsole/spectre.console.git",
+      "commit": "357b9ab967e2885dbb0371d86b13b1bfb1921a14",
+      "cases": [
+        {
+          "name": "csharp-ansi-console",
+          "query": "AnsiConsole create console settings",
+          "expectedPaths": ["src/Spectre.Console/AnsiConsole.cs"],
+          "requiredAnchors": ["public static partial class AnsiConsole"]
+        }
+      ]
+    },
+    {
+      "name": "curl",
+      "url": "https://github.com/curl/curl.git",
+      "commit": "8a2bb9ca241bbd82a0da536f6f39dca9037dd046",
+      "cases": [
+        {
+          "name": "c-curl-easy-init",
+          "query": "curl_easy_init global init handle",
+          "expectedPaths": ["lib/easy.c"],
+          "requiredAnchors": ["CURL *curl_easy_init(void)"]
+        }
+      ]
+    },
+    {
+      "name": "fmt",
+      "url": "https://github.com/fmtlib/fmt.git",
+      "commit": "e589a16ecbebcc330a68e7a2223451b469e0c82d",
+      "cases": [
+        {
+          "name": "cpp-format-int",
+          "query": "format_int fast integer formatter",
+          "expectedPaths": ["include/fmt/format.h"],
+          "requiredAnchors": ["class format_int"]
+        }
+      ]
+    },
+    {
+      "name": "rust-analyzer-workspace",
+      "url": "https://github.com/rust-lang/rust-analyzer.git",
+      "commit": "e96ea7a5805992ec868e8ab185bc371267048421",
+      "cases": [
+        {
+          "name": "large-workspace-analysis-host",
+          "query": "AnalysisHost apply change analysis snapshot",
+          "expectedPaths": ["crates/ide/src/lib.rs"],
+          "requiredAnchors": ["pub struct AnalysisHost"]
+        }
+      ]
     }
   ]
 }
