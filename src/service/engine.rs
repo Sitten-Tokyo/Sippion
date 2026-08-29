@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -81,11 +81,6 @@ impl RepositoryEngine {
 
         let search_truncated = optimized.outcome.truncated;
         let coverage = optimized.outcome.coverage.clone();
-        let structural_scores = structure
-            .entries
-            .iter()
-            .map(|entry| (entry.relative_path.as_str(), entry.score))
-            .collect::<HashMap<_, _>>();
         let invalidated_evidence = structure
             .invalidated_evidence_paths
             .iter()
@@ -100,10 +95,11 @@ impl RepositoryEngine {
             .filter(|hit| !invalidated_evidence.contains(hit.relative_path.as_str()))
             .filter(|hit| seen_paths.insert(hit.relative_path.clone()))
             .map(|hit| RenderExcerpt {
-                score: structural_scores
-                    .get(hit.relative_path.as_str())
-                    .copied()
-                    .unwrap_or(hit.score),
+                // Evidence atoms should retain retrieval relevance. Structural-map relevance is
+                // represented independently by structure atoms, so replacing the retrieval score
+                // here can accidentally hide the strongest exact source excerpt from the final
+                // model-visible pack.
+                score: hit.score,
                 path: hit.relative_path,
                 start_line: hit.start_line,
                 end_line: hit.end_line,

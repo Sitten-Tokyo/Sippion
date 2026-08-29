@@ -26,8 +26,6 @@ pub(super) fn upsert_repo_edge(
 #[cfg(test)]
 pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome) -> f64 {
     if outcome.hits.is_empty() {
-        // A policy-excluded file is intentionally not adaptive-scan-expandable, but it still
-        // prevents a repository-wide absence claim because its contents were never inspected.
         return if outcome.truncated {
             0.05
         } else if outcome.coverage.policy_excluded_files > 0 {
@@ -76,7 +74,6 @@ pub(super) fn search_confidence(query: &NormalizedQuery, outcome: &SearchOutcome
 }
 
 pub(super) fn stable_term_hash(text: &str) -> u64 {
-    // Stable FNV-1a keeps the RAM index compact and avoids retaining repository tokens verbatim.
     let folded = crate::core::unicode_search_fold(text);
     let mut hash = 0xcbf29ce484222325u64;
     for byte in folded.as_bytes() {
@@ -131,8 +128,6 @@ pub(super) fn substring_gram_key(window: &[u8]) -> u32 {
 }
 
 pub(super) fn unicode_sequence_gram_key(window: &[char]) -> u32 {
-    // ASCII substring keys use top-byte namespaces 2 and 3. Reserve the high bit for Unicode
-    // sequence sketches and include both sequence length and scalar order in the hash.
     let mut hash = 0x811c9dc5u32 ^ window.len() as u32;
     for ch in window {
         let mut encoded = [0u8; 4];
@@ -162,9 +157,6 @@ pub(super) fn query_substring_grams(term: &str) -> Vec<u32> {
         return grams;
     }
 
-    // Full Unicode folding happens before this stage. Use the longest available one/two/three
-    // scalar window so a candidate must preserve local order and adjacency rather than merely
-    // contain the same set of scalars. Exact source verification remains authoritative.
     let chars = term.chars().collect::<Vec<_>>();
     if chars.is_empty() {
         return Vec::new();
@@ -213,11 +205,6 @@ pub(super) fn build_indexed_document(text: &str, stamp: Option<SourceStamp>) -> 
         for fragment in identifier_fragments(part) {
             add_index_term(&mut counts, &fragment, &mut term_truncated);
         }
-
-        // Candidate sketches never retain source bodies or plaintext tokens. ASCII keeps compact
-        // two/three-byte grams. Tokens containing Unicode additionally get ordered one/two/three
-        // scalar sequence sketches, so substring recall is retained without discarding adjacency.
-        // ASCII runs inside mixed identifiers also keep ordinary substring recall.
         for ascii_run in lower.split(|ch: char| !ch.is_ascii()) {
             let bytes = ascii_run.as_bytes();
             for width in [2usize, 3usize] {
@@ -285,8 +272,6 @@ pub(super) fn indexed_query_frequencies(
                     .iter()
                     .all(|gram| document.substring_grams.binary_search(gram).is_ok())
             {
-                // This is deliberately a one-hit fallback, matching the pre-index substring
-                // behavior. False positives are removed by bounded source verification.
                 1
             } else {
                 0
@@ -314,8 +299,6 @@ pub(super) fn stratified_pending_lanes(
             .then_with(|| a.file.path.cmp(&b.file.path))
     });
 
-    // Roughly one eighth of ordinary files form a deterministic cross-repository sample. Files
-    // already consumed by this lane are skipped when the round-robin broad lane is reached.
     let mut sample = ordinary
         .iter()
         .filter(|file| stable_term_hash(&file.file.path) % 8 == 0)
@@ -374,9 +357,6 @@ pub(super) fn bounded_search_excerpt(
         if joined.len() <= MAX_SEARCH_EXCERPT_BYTES {
             return (joined, start, end);
         }
-
-        // Remove the larger outer neighbor first while always retaining the matched line. This
-        // prevents a huge adjacent line from consuming the excerpt and hiding the actual match.
         if start < focus || end > focus + 1 {
             let left_bytes = if start < focus {
                 lines[start].len().saturating_add(1)
@@ -395,7 +375,6 @@ pub(super) fn bounded_search_excerpt(
             }
             continue;
         }
-
         return (
             bounded_focus_line(lines[focus], focus_match_byte),
             focus,
@@ -422,8 +401,6 @@ pub(super) fn bounded_focus_line(line: &str, match_byte: usize) -> String {
     while end > start && !line.is_char_boundary(end) {
         end -= 1;
     }
-
-    // If clamping at EOF left unused budget, shift left without ever exceeding the byte budget.
     if end == line.len() && end.saturating_sub(start) < payload_budget {
         start = end.saturating_sub(payload_budget);
         while start < end && !line.is_char_boundary(start) {
@@ -444,8 +421,6 @@ pub(super) fn bounded_focus_line(line: &str, match_byte: usize) -> String {
 }
 
 pub(super) fn source_content_fingerprint(text: &str) -> (u64, u64) {
-    // Two independently seeded FNV-1a lanes provide a compact, allocation-free content identity.
-    // This is a consistency guard, not an authentication primitive.
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut left = 0xcbf2_9ce4_8422_2325u64;
     let mut right = 0x8422_2325_cbf2_9ce4u64;
@@ -476,17 +451,38 @@ pub(super) fn path_match_score(path: &str, terms: &[String]) -> usize {
         .count()
 }
 
+fn is_test_like_source(path: &str) -> bool {
+    let folded = path.replace('\\', "/").to_ascii_lowercase();
+    let parts = folded.split('/').collect::<Vec<_>>();
+    if parts.iter().any(|part| {
+        matches!(*part, "test" | "tests" | "testing" | "__tests__") || part.ends_with(".tests")
+    }) {
+        return true;
+    }
+    let file = parts.last().copied().unwrap_or("");
+    let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    stem.ends_with("_test")
+        || stem.ends_with("-test")
+        || stem.ends_with(".test")
+        || stem.ends_with("tests")
+}
+
 pub(super) fn coding_source_prior(path: &str) -> f64 {
-    // Sippion prepares context for coding tasks. Documentation remains searchable, but when
-    // lexical evidence is otherwise similar, implementation source should beat changelogs/history.
-    // Keep the prior smaller than two matched query terms so strong documentation evidence can
-    // still win when the user's query is actually documentation-oriented.
+    // Coding queries commonly match both an implementation and its tests. Preserve test files as
+    // searchable source, but give implementation files a modest tie-breaking prior when lexical
+    // evidence is otherwise similar. The gap stays below one matched query term (10 points).
     let extension = path.rsplit_once('.').map(|(_, extension)| extension);
     match extension.map(str::to_ascii_lowercase).as_deref() {
         Some(
             "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "go" | "java" | "cs" | "c" | "h" | "cc"
             | "cpp" | "cxx" | "hpp" | "hxx",
-        ) => 14.0,
+        ) => {
+            if is_test_like_source(path) {
+                6.0
+            } else {
+                14.0
+            }
+        }
         _ => 0.0,
     }
 }
@@ -515,7 +511,6 @@ pub(super) fn path_parts(path: &Path) -> Option<Vec<String>> {
     let mut parts = Vec::new();
     for component in path.components() {
         if let Component::Normal(part) = component {
-            // This feeds filesystem safety policy, which is intentionally ASCII case-insensitive.
             parts.push(part.to_str()?.to_ascii_lowercase());
         }
     }
@@ -538,7 +533,7 @@ pub(super) fn read_failure_makes_scan_incomplete(error: &RepositoryAccessError) 
 
 #[cfg(test)]
 mod coding_source_prior_tests {
-    use super::coding_source_prior;
+    use super::{coding_source_prior, is_test_like_source};
 
     #[test]
     fn implementation_sources_get_a_small_coding_prior() {
@@ -546,5 +541,16 @@ mod coding_source_prior_tests {
             coding_source_prior("src/repo/map.rs") > coding_source_prior("docs/architecture.md")
         );
         assert_eq!(coding_source_prior("CHANGELOG.md"), 0.0);
+    }
+
+    #[test]
+    fn implementation_sources_beat_test_mirrors_without_hiding_tests() {
+        assert!(is_test_like_source("tests/repo_test.rs"));
+        assert!(is_test_like_source(
+            "src/System.CommandLine.Tests/ParserTests.cs"
+        ));
+        assert!(is_test_like_source("test/enum-test.cc"));
+        assert!(coding_source_prior("src/command.go") > coding_source_prior("command_test.go"));
+        assert!(coding_source_prior("command_test.go") > 0.0);
     }
 }

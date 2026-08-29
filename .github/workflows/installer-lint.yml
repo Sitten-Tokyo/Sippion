@@ -1,0 +1,78 @@
+name: Installer static analysis
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/bootstrap.sh'
+      - 'scripts/install.sh'
+      - 'scripts/bootstrap.ps1'
+      - 'scripts/install.ps1'
+      - '.github/workflows/installer-lint.yml'
+  push:
+    paths:
+      - 'scripts/bootstrap.sh'
+      - 'scripts/install.sh'
+      - 'scripts/bootstrap.ps1'
+      - 'scripts/install.ps1'
+      - '.github/workflows/installer-lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned ShellCheck 0.11.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            --output "$archive"
+          echo '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  '"$archive" | sha256sum --check --strict
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >> "$GITHUB_PATH"
+
+      - name: Analyze POSIX installers
+        run: shellcheck --severity=warning scripts/bootstrap.sh scripts/install.sh
+
+  psscriptanalyzer:
+    runs-on: windows-2025
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install exact PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force -ErrorAction Stop
+          $version = (Get-Module PSScriptAnalyzer -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()
+          if ($version -ne '1.25.0') { throw "unexpected PSScriptAnalyzer version: $version" }
+
+      - name: Analyze PowerShell installers
+        shell: pwsh
+        run: |
+          # These interactive bootstrap/install scripts intentionally use Write-Host for progress
+          # text. Replacing it with pipeline output would change observable installer semantics.
+          # Keep all other Warning/Error rules enabled.
+          $results = @(
+            'scripts/bootstrap.ps1',
+            'scripts/install.ps1'
+          ) | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path $_ -Severity Warning,Error -ExcludeRule PSAvoidUsingWriteHost
+          }
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Error
+            exit 1
+          }

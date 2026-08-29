@@ -34,7 +34,9 @@ Tree-sitter and semantic extraction run only on already-ranked candidates and ar
 
 Heuristic or semantic evidence must not be described as compiler-authoritative.
 
-Retrieval changes should preserve the committed fixture/self-hosted gates and should also be checked against the pinned external OSS holdout when they materially change ranking, parsing, semantic expansion, or packing. Query-input changes should update deterministic property tests and the relevant fuzz target. Performance-sensitive changes should inspect the base/head comparison instead of relying on a single absolute CI duration. See `docs/quality.md` for the commands and workflow boundaries.
+Retrieval changes should preserve the committed fixture/self-hosted gates and should also be checked against the pinned nine-language external OSS holdout when they materially change ranking, parsing, semantic expansion, or packing. Query, redaction, path-policy, syntax, or MCP-input changes should update the corresponding deterministic/property or fuzz coverage. Performance-sensitive changes should inspect both cold CLI and warm MCP base/head comparisons instead of relying on one absolute CI duration. See `docs/quality.md` for commands and workflow boundaries.
+
+Installer changes must pass both syntax checks and the dedicated ShellCheck/PSScriptAnalyzer workflow. Workflow changes must pass actionlint and zizmor; continue pinning third-party actions to immutable commit SHAs.
 
 ## Pull requests
 

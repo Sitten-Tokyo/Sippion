@@ -31,7 +31,10 @@ jobs:
           python3 -m json.tool eval/external_repos.json >/dev/null
 
   holdout:
-    if: github.event_name != 'pull_request'
+    # Pull requests run the real networked holdout for immediate evidence, but an upstream GitHub
+    # outage must not block an otherwise deterministic merge. Scheduled/manual executions remain
+    # strict because they are the durable external-regression signal.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -50,4 +53,15 @@ jobs:
         env:
           GIT_CONFIG_NOSYSTEM: '1'
           GIT_TERMINAL_PROMPT: '0'
-        run: python3 scripts/external-retrieval-eval.py --binary target/release/sippion
+        run: |
+          set -o pipefail
+          python3 scripts/external-retrieval-eval.py --binary target/release/sippion | tee external-eval.jsonl
+
+      - name: Upload external evaluation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: external-eval-${{ github.event.pull_request.head.sha || github.sha }}
+          path: external-eval.jsonl
+          if-no-files-found: warn
+          retention-days: 14

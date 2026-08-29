@@ -10,6 +10,10 @@ license = "MIT OR Apache-2.0"
 name = "sippion"
 path = "src/main.rs"
 
+[features]
+default = []
+fuzzing = []
+
 [dependencies]
 aho-corasick = "1.1"
 serde = { version = "1", features = ["derive"] }

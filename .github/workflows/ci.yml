@@ -125,7 +125,16 @@ jobs:
             --binary target/release/sippion \
             --cases eval/self_holdout_cases.json \
             --fixture "$holdout_root" \
-            --baseline-root "$holdout_root"
+            --baseline-root "$holdout_root" \
+            | tee self-holdout-report.json
+
+      - name: Upload whole-repository holdout report
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: self-holdout-report-${{ github.sha }}
+          path: self-holdout-report.json
+          if-no-files-found: warn
 
       - name: Set up pinned Node.js for official MCP client and MCPB tooling
         if: runner.os == 'Linux'

@@ -92,6 +92,7 @@ def main():
     parser.add_argument("--fixture", default="eval/fixture")
     parser.add_argument("--cases", default="eval/cases.json")
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--output")
     args = parser.parse_args()
 
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))["cases"]
@@ -104,7 +105,12 @@ def main():
     candidate = measure(str(Path(args.candidate).resolve()), fixture, queries, args.repetitions)
 
     report = {"baseline": baseline, "candidate": candidate}
-    print(json.dumps(report, indent=2, sort_keys=True))
+    rendered = json.dumps(report, indent=2, sort_keys=True)
+    print(rendered)
+    if args.output:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered + "\n", encoding="utf-8")
 
     failures = []
     if exceeds(candidate["medianLatencyMs"], baseline["medianLatencyMs"], 1.30, 20.0):
