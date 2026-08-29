@@ -24,9 +24,12 @@ use crate::syntax::{
 };
 
 pub const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_DISCOVERED_FILES: usize = 50_000;
-pub const MAX_DISCOVERED_ENTRIES: usize = 100_000;
-pub const MAX_DISCOVERED_PATH_BYTES: usize = 16 * 1024 * 1024;
+// Discovery remains hard-bounded, but large monorepos can exceed 50k eligible source files before
+// a relevant package is reached. Keep the file/entry/path caps proportional so retrieval can cover
+// those repositories without making source scanning or indexing unbounded.
+pub const MAX_DISCOVERED_FILES: usize = 100_000;
+pub const MAX_DISCOVERED_ENTRIES: usize = 200_000;
+pub const MAX_DISCOVERED_PATH_BYTES: usize = 32 * 1024 * 1024;
 /// Default hard ceiling for adaptive retrieval. A normal call starts at 32 MiB and expands only
 /// when bounded evidence remains incomplete and confidence is low.
 pub const MAX_SCAN_BYTES: usize = 512 * 1024 * 1024;
