@@ -72,7 +72,7 @@
       "cases": [
         {
           "name": "go-cobra-command",
-          "query": "Command execute flags args subcommands",
+          "query": "type Command struct PersistentPreRunE TraverseChildren",
           "expectedPaths": ["command.go"],
           "requiredAnchors": ["type Command struct"]
         }
