@@ -20,30 +20,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315
         with:
           components: rustfmt, clippy
-      - name: Apply natural definition ownership fix
+      - name: Apply definition ownership and packing fixes
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/hybrid.rs')
-          text = path.read_text(encoding='utf-8')
+          def replace_once(text, old, new, label):
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected one match, got {text.count(old)}')
+              return text.replace(old, new, 1)
 
-          old_line = '        let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;'
-          new_lines = '''        // Keep the established single-symbol ownership score, but make a compound definition
+          hybrid = Path('src/hybrid.rs')
+          text = hybrid.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '        let coverage_bonus = 6.0 + identifier_matches as f64 * 4.0;',
+              '''        // Keep the established single-symbol ownership score, but make a compound definition
           // that owns two or more natural-language query concepts stronger than surrounding prose.
           // This is definition-only; ordinary compound references retain the weaker bonus below.
           let coverage_bonus = if identifier_matches >= 2 {
               18.0 + identifier_matches as f64 * 6.0
           } else {
               10.0
-          };'''
-          if text.count(old_line) != 1:
-              raise SystemExit('definition bonus line mismatch')
-          text = text.replace(old_line, new_lines, 1)
-          if text.count('.min(22.0);') != 1:
-              raise SystemExit('definition bonus cap mismatch')
-          text = text.replace('.min(22.0);', '.min(36.0);', 1)
+          };''',
+              'definition bonus',
+          )
+          text = replace_once(text, '.min(22.0);', '.min(36.0);', 'definition cap')
 
           def rewrite_test(source, fn_name, replacements):
               marker = f'    fn {fn_name}() {{'
@@ -71,7 +74,213 @@ jobs:
               ('"markers".to_string()', '"table".to_string()'),
               ('PROJECT_MARKERS', 'QUASAR_TABLE'),
           ])
-          path.write_text(text, encoding='utf-8')
+          hybrid.write_text(text, encoding='utf-8')
+
+          context = Path('src/service/context.rs')
+          text = context.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '''struct ContextAtom {
+              kind: ContextAtomKind,
+              path: String,
+              text: String,
+              utility: f64,
+              token_cost: usize,
+          }'''.replace('          ', ''),
+              '''struct ContextAtom {
+              kind: ContextAtomKind,
+              path: String,
+              text: String,
+              utility: f64,
+              token_cost: usize,
+              query_symbol_matches: usize,
+          }'''.replace('          ', ''),
+              'context atom field',
+          )
+          text = replace_once(
+              text,
+              'fn structure_atom(entry: &RepoMapEntry, weights: ContextPackerWeights) -> ContextAtom {',
+              'fn structure_atom(\n    query: &NormalizedQuery,\n    entry: &RepoMapEntry,\n    weights: ContextPackerWeights,\n) -> ContextAtom {',
+              'structure atom signature',
+          )
+          text = replace_once(
+              text,
+              '''    for symbol in entry.symbols.iter().take(3) {
+              text.push_str(&format!(
+                  "  {} {}:{} {}\\n",
+                  symbol.kind,
+                  escaped(&symbol.name),
+                  symbol.line,
+                  escaped(symbol.signature.trim())
+              ));
+          }
+          let semantic_bonus ='''.replace('          ', ''),
+              '''    let mut visible_symbol_text = String::new();
+          for symbol in entry.symbols.iter().take(3) {
+              text.push_str(&format!(
+                  "  {} {}:{} {}\\n",
+                  symbol.kind,
+                  escaped(&symbol.name),
+                  symbol.line,
+                  escaped(symbol.signature.trim())
+              ));
+              visible_symbol_text.push_str(&symbol.name);
+              visible_symbol_text.push(' ');
+              visible_symbol_text.push_str(&symbol.signature);
+              visible_symbol_text.push(' ');
+          }
+          let folded_symbols = crate::core::unicode_search_fold(&visible_symbol_text);
+          let query_symbol_matches = query
+              .terms
+              .iter()
+              .filter(|term| folded_symbols.contains(term.as_str()))
+              .count();
+          let semantic_bonus ='''.replace('          ', ''),
+              'visible symbol query matching',
+          )
+          text = replace_once(
+              text,
+              '''        text,
+              utility,
+          }
+          }
+
+          fn framed_evidence_body'''.replace('          ', ''),
+              '''        text,
+              utility,
+              query_symbol_matches,
+          }
+          }
+
+          fn framed_evidence_body'''.replace('          ', ''),
+              'structure atom match field',
+          )
+          text = replace_once(
+              text,
+              '''        text,
+              utility,
+          }
+          }
+
+          fn best_fitting_atom'''.replace('          ', ''),
+              '''        text,
+              utility,
+              query_symbol_matches: 0,
+          }
+          }
+
+          fn best_fitting_atom'''.replace('          ', ''),
+              'evidence atom match field',
+          )
+          text = replace_once(
+              text,
+              '    atoms.extend(entries.iter().map(|entry| structure_atom(entry, weights)));',
+              '    atoms.extend(\n        entries\n            .iter()\n            .map(|entry| structure_atom(query, entry, weights)),\n    );',
+              'structure atom construction',
+          )
+          marker = '''    while order.len() < MAX_PACKED_ATOMS {
+          '''.replace('          ', '')
+          reservation = '''    // Preserve one query-relevant definition/signature structure when it fits. This keeps a
+          // compact symbol-level ownership signal model-visible instead of letting prose-heavy atoms
+          // crowd it out, while retaining the same soft token and hard atom budgets.
+          if order.len() < MAX_PACKED_ATOMS {
+              if let Some((index, atom)) = atoms
+                  .iter()
+                  .enumerate()
+                  .filter(|(index, atom)| {
+                      !selected.contains(index)
+                          && atom.kind == ContextAtomKind::Structure
+                          && atom.query_symbol_matches > 0
+                  })
+                  .filter(|(_, atom)| {
+                      atom.token_cost <= remaining_tokens && atom.text.len() <= remaining_bytes
+                  })
+                  .max_by(|(left_index, left), (right_index, right)| {
+                      left.query_symbol_matches
+                          .cmp(&right.query_symbol_matches)
+                          .then_with(|| {
+                              left.utility
+                                  .partial_cmp(&right.utility)
+                                  .unwrap_or(Ordering::Equal)
+                          })
+                          .then_with(|| right_index.cmp(left_index))
+                  })
+              {
+                  selected.insert(index);
+                  selected_paths.insert(atom.path.clone());
+                  remaining_tokens = remaining_tokens.saturating_sub(atom.token_cost);
+                  remaining_bytes = remaining_bytes.saturating_sub(atom.text.len());
+                  order.push(index);
+              }
+          }
+
+          while order.len() < MAX_PACKED_ATOMS {
+          '''.replace('          ', '')
+          text = replace_once(text, marker, reservation, 'query structure reservation')
+          text = text.replace(
+              '''                utility: 10.0,
+              token_cost: 10,
+          }'''.replace('          ', ''),
+              '''                utility: 10.0,
+              token_cost: 10,
+              query_symbol_matches: 0,
+          }'''.replace('          ', ''),
+          )
+          text = text.replace(
+              '''                utility: 6.0,
+              token_cost: 10,
+          }'''.replace('          ', ''),
+              '''                utility: 6.0,
+              token_cost: 10,
+              query_symbol_matches: 0,
+          }'''.replace('          ', ''),
+          )
+          test_marker = '''    #[test]
+          fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {'''.replace('          ', '')
+          test = '''    #[test]
+          fn packer_reserves_query_relevant_structure_symbol() {
+              let mut entries = (0..12)
+                  .map(|index| RepoMapEntry {
+                      relative_path: format!("src/noise_{index}.rs"),
+                      score: 1_000.0 - index as f64,
+                      symbols: vec![RepoMapSymbol {
+                          name: format!("unrelated_{index}"),
+                          kind: "function".into(),
+                          line: 1,
+                          signature: format!("fn unrelated_{index}()"),
+                      }],
+                      links_to: Vec::new(),
+                      semantic_links: Vec::new(),
+                  })
+                  .collect::<Vec<_>>();
+              entries.push(RepoMapEntry {
+                  relative_path: "src/auth_definition.rs".into(),
+                  score: 0.1,
+                  symbols: vec![RepoMapSymbol {
+                      name: "authentication_token".into(),
+                      kind: "function".into(),
+                      line: 7,
+                      signature: "fn authentication_token()".into(),
+                  }],
+                  links_to: Vec::new(),
+                  semantic_links: Vec::new(),
+              });
+              let coverage = SearchCoverage {
+                  discovery_complete: true,
+                  eligible_files: entries.len(),
+                  indexed_files: entries.len(),
+                  confidence_milli: 900,
+                  ..SearchCoverage::default()
+              };
+              let packed = pack_context(&query(), &entries, &[], "", &coverage);
+              assert!(packed.text.contains("authentication_token"));
+              assert!(packed.packed_paths.contains(&"src/auth_definition.rs".to_string()));
+          }
+
+          #[test]
+          fn novelty_discount_ablation_prefers_new_path_over_redundant_same_path() {'''.replace('          ', '')
+          text = replace_once(text, test_marker, test, 'packer reservation test')
+          context.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all
           cargo fmt --all -- --check
@@ -90,12 +299,12 @@ jobs:
             --cases eval/self_holdout_cases.json \
             --fixture "$holdout_root" \
             --baseline-root "$holdout_root"
-      - name: Commit validated fix and remove helper
+      - name: Commit validated fixes and remove helper
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/hybrid.rs
+          git add src/hybrid.rs src/service/context.rs
           git rm -f .github/workflows/natural-definition-holdout-fix.yml
-          git commit -m "Strengthen natural-query definition ownership"
+          git commit -m "Preserve query-relevant definitions in packed context"
           git push origin HEAD:feature/context-efficiency-overhaul
