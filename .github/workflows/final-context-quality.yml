@@ -25,6 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/apply-final-context-quality.py
+          python3 .github/scripts/apply-symbol-fallback.py
           python3 - <<'PY'
           from pathlib import Path
           path = Path('src/service/context.rs')
@@ -69,7 +70,9 @@ jobs:
             --exclude='./node_modules' \
             --exclude='./.github/scripts/final-context-quality.py' \
             --exclude='./.github/scripts/apply-final-context-quality.py' \
+            --exclude='./.github/scripts/apply-symbol-fallback.py' \
             --exclude='./.github/workflows/final-context-quality.yml' \
+            --exclude='./.github/workflows/debug-source-prior.yml' \
             -cf - . | tar -xf - -C "$holdout_root"
           python3 scripts/retrieval-eval.py \
             --binary target/release/sippion \
@@ -111,7 +114,7 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/core.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs docs/architecture.md CHANGELOG.md
-          git rm -f .github/scripts/final-context-quality.py .github/scripts/apply-final-context-quality.py .github/workflows/final-context-quality.yml
+          git add src/core.rs src/hybrid.rs src/service.rs src/service/context.rs src/service/engine.rs src/repo.rs src/repo/map.rs docs/architecture.md CHANGELOG.md
+          git rm -f .github/scripts/final-context-quality.py .github/scripts/apply-final-context-quality.py .github/scripts/apply-symbol-fallback.py .github/workflows/final-context-quality.yml .github/workflows/debug-source-prior.yml
           git commit -m "Strengthen context evaluation and diagnostics"
           git push origin HEAD:feature/context-efficiency-overhaul
