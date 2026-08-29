@@ -1,4 +1,6 @@
 {
+  "suiteVersion": 2,
+  "frozen": true,
   "minRecallAt5": 1.0,
   "minMrr": 0.75,
   "minExpectedPathRecallAt5": 0.9,
@@ -11,14 +13,170 @@
   "minAverageTokenSavings": 0.85,
   "minRelevantPathsPer1kTokens": 0.3,
   "minEvidenceAnchorsPer1kTokens": 0.3,
+  "minRecallDeltaVsBm25": 0.0,
   "cases": [
-    {"name":"engine-diagnostics","query":"repository engine context diagnostics","expectedPaths":["src/service/engine.rs","src/service.rs"],"requiredAnchors":["RepositoryEngine","ContextDiagnostics"],"maxReturnedBytes":16384,"maxEstimatedTokens":3000},
-    {"name":"unicode-retrieval","query":"unicode search fold token","expectedPaths":["src/core.rs"],"requiredAnchors":["unicode_search_fold"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
-    {"name":"fingerprint-consistency","query":"source fingerprint stale evidence","expectedPaths":["src/repo/ranking.rs","src/repo/map.rs"],"requiredAnchors":["source_content_fingerprint"],"maxReturnedBytes":16384,"maxEstimatedTokens":3000},
-    {"name":"adaptive-rarity","query":"adaptive rarity confidence document frequency","expectedPaths":["src/repo/adaptive.rs"],"requiredAnchors":["normalized_idf_rarity"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
-    {"name":"semantic-import-neighbor","query":"semantic import expansion neighbor","expectedPaths":["src/repo/map.rs"],"requiredAnchors":["semantic_expansion_paths"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
-    {"name":"redaction-oversize","query":"secret redaction oversize line","expectedPaths":["src/repo/redaction.rs"],"requiredAnchors":["REDACTED_OVERSIZE_LINE"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
-    {"name":"mcp-cancel","query":"mcp cancellation inflight response","expectedPaths":["src/mcp.rs"],"requiredAnchors":["InflightRequest"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600},
-    {"name":"root-project-safety","query":"root project marker secure","expectedPaths":["src/root.rs"],"requiredAnchors":["PROJECT_MARKERS"],"maxReturnedBytes":8192,"maxEstimatedTokens":2600}
+    {
+      "name": "engine-diagnostics",
+      "query": "repository engine context diagnostics",
+      "expectedPaths": ["src/service/engine.rs", "src/service.rs"],
+      "requiredEvidence": [
+        {"path": "src/service/engine.rs", "kind": "structure", "anchors": ["RepositoryEngine"]},
+        {"path": "src/service.rs", "kind": "structure", "anchors": ["ContextDiagnostics"]}
+      ],
+      "maxReturnedBytes": 16384,
+      "maxEstimatedTokens": 3000
+    },
+    {
+      "name": "unicode-retrieval",
+      "query": "unicode search fold token",
+      "expectedPaths": ["src/core.rs"],
+      "requiredEvidence": [{"path": "src/core.rs", "kind": "structure", "anchors": ["unicode_search_fold"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "fingerprint-consistency",
+      "query": "source fingerprint stale evidence",
+      "expectedPaths": ["src/repo/ranking.rs", "src/repo/map.rs"],
+      "requiredEvidence": [{"path": "src/repo/ranking.rs", "kind": "structure", "anchors": ["source_content_fingerprint"]}],
+      "maxReturnedBytes": 16384,
+      "maxEstimatedTokens": 3000
+    },
+    {
+      "name": "adaptive-rarity",
+      "query": "adaptive rarity confidence document frequency",
+      "expectedPaths": ["src/repo/adaptive.rs"],
+      "requiredEvidence": [{"path": "src/repo/adaptive.rs", "kind": "structure", "anchors": ["normalized_idf_rarity"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "semantic-import-neighbor",
+      "query": "semantic import expansion neighbor",
+      "expectedPaths": ["src/repo/map.rs"],
+      "requiredEvidence": [{"path": "src/repo/map.rs", "kind": "structure", "anchors": ["semantic_expansion_paths"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "redaction-oversize",
+      "query": "secret redaction oversize line",
+      "expectedPaths": ["src/repo/redaction.rs"],
+      "requiredEvidence": [{"path": "src/repo/redaction.rs", "kind": "evidence", "anchors": ["REDACTED_OVERSIZE_LINE"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "mcp-cancel",
+      "query": "mcp cancellation inflight response",
+      "expectedPaths": ["src/mcp.rs"],
+      "requiredEvidence": [{"path": "src/mcp.rs", "kind": "structure", "anchors": ["InflightRequest"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "root-project-safety",
+      "query": "root project marker secure",
+      "expectedPaths": ["src/root.rs"],
+      "requiredEvidence": [{"path": "src/root.rs", "kind": "structure", "anchors": ["PROJECT_MARKERS"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "token-estimator",
+      "query": "heuristic model token estimate bytes",
+      "expectedPaths": ["src/core.rs"],
+      "requiredEvidence": [{"path": "src/core.rs", "kind": "structure", "anchors": ["heuristic_v3_estimated_tokens"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "context-budget",
+      "query": "adaptive context budget confidence ambiguity",
+      "expectedPaths": ["src/core.rs"],
+      "requiredEvidence": [{"path": "src/core.rs", "kind": "structure", "anchors": ["adaptive_context_budget"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "tokenization-boundary",
+      "query": "search token split unicode identifier",
+      "expectedPaths": ["src/core.rs"],
+      "requiredEvidence": [{"path": "src/core.rs", "kind": "structure", "anchors": ["split_search_tokens"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "folded-offset",
+      "query": "folded search original byte offset",
+      "expectedPaths": ["src/core.rs"],
+      "requiredEvidence": [{"path": "src/core.rs", "kind": "structure", "anchors": ["unicode_search_fold_find_byte"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "bm25-runtime",
+      "query": "bm25 term document frequency score",
+      "expectedPaths": ["src/hybrid.rs"],
+      "requiredEvidence": [{"path": "src/hybrid.rs", "kind": "structure", "anchors": ["bm25_score"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "definition-ownership",
+      "query": "structural line definition ownership bonus",
+      "expectedPaths": ["src/hybrid.rs"],
+      "requiredEvidence": [{"path": "src/hybrid.rs", "kind": "structure", "anchors": ["structural_line_bonus"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "weighted-centrality",
+      "query": "weighted graph pagerank semantic edge",
+      "expectedPaths": ["src/hybrid.rs"],
+      "requiredEvidence": [{"path": "src/hybrid.rs", "kind": "structure", "anchors": ["weighted_pagerank"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "source-compaction",
+      "query": "source excerpt compact trailing whitespace",
+      "expectedPaths": ["src/hybrid.rs"],
+      "requiredEvidence": [{"path": "src/hybrid.rs", "kind": "structure", "anchors": ["compact_source_excerpt"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "context-packer",
+      "query": "pack context utility token atom",
+      "expectedPaths": ["src/service/context.rs"],
+      "requiredEvidence": [{"path": "src/service/context.rs", "kind": "structure", "anchors": ["pack_context"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "source-prior",
+      "query": "coding source prior ranking implementation",
+      "expectedPaths": ["src/repo/ranking.rs"],
+      "requiredEvidence": [{"path": "src/repo/ranking.rs", "kind": "structure", "anchors": ["coding_source_prior"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "module-normalization",
+      "query": "import module normalization language alias",
+      "expectedPaths": ["src/repo/map.rs"],
+      "requiredEvidence": [{"path": "src/repo/map.rs", "kind": "structure", "anchors": ["normalized_import_module"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    },
+    {
+      "name": "map-candidate-build",
+      "query": "build map candidate structural analysis",
+      "expectedPaths": ["src/repo/map.rs"],
+      "requiredEvidence": [{"path": "src/repo/map.rs", "kind": "structure", "anchors": ["build_map_candidate"]}],
+      "maxReturnedBytes": 8192,
+      "maxEstimatedTokens": 2600
+    }
   ]
 }
