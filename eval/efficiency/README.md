@@ -1,93 +1,139 @@
 # Efficiency benchmark pilot
 
-This benchmark validates Sippion's efficiency layer with two hard outcomes: correctness and token use.
+This directory contains the real-Codex pilot for Sippion's efficiency layer. The
+only product metrics are correctness and total tokens. Input, cached-input, and
+output tokens are retained for diagnosis; cost, duration, LOC, file count,
+dependency count, clarification count, and subjective scores are not metrics.
 
-## Arms
+## Matrix and arms
 
-1. `baseline` — no Sippion behavior.
-2. `retrieval` — repository retrieval only.
-3. `minimal-build` — retrieval plus smallest-correct-solution behavior.
-4. `full` — minimal-build plus compact decision/output behavior.
+`tasks.json` contains 12 real-OSS tasks pinned to immutable commit SHAs:
 
-## Pilot matrix
+- 4 TypeScript/React tasks
+- 4 Python tasks
+- 4 Rust tasks
+- at least one monorepo
 
-Use 12 mechanically verifiable tasks:
+The task categories cover bug fixes, features, refactors, reviews, dependency
+and abstraction temptations, both kinds of ambiguity, and security-sensitive
+work. Every verifier is deterministic; no LLM judge is used.
 
-- 4 TypeScript/React
-- 4 Python
-- 4 Rust
+Each task runs five times under each arm (240 executions total):
 
-Include at least one monorepo. Cover bug fixes, features, refactors, reviews, dependency temptations, abstraction temptations, ambiguity, and security. Include both ambiguity cases where asking one question is correct and cases where choosing a reasonable default is correct.
+1. `baseline`: no Sippion MCP and no Sippion rule.
+2. `retrieval`: only the `repo_context` MCP tool.
+3. `minimal-build`: retrieval plus the smallest-correct-solution rule.
+4. `full`: retrieval plus the complete managed efficiency rule.
 
-Run each task/arm combination five times. Primary aggregation is median.
+The runner writes each run in a fresh checkout, private HOME/cache/temp
+directories, and temporary `CODEX_HOME`. It checks out the manifest commit
+before setup and never changes the user's global Codex configuration.
 
-## Required measurements
+## Prerequisites and authentication
 
-Each JSONL row records only the benchmark inputs needed for the two product metrics:
+- Python 3.10 or newer
+- Git
+- Codex CLI (`codex exec --json`)
+- A release Sippion binary for retrieval arms
+
+Authentication can come from an already authenticated local Codex CLI or from
+`OPENAI_API_KEY`. The runner accepts either, never puts credentials in command
+arguments or result rows, and never prints credential-related command output.
+Missing authentication fails closed. The manual GitHub Actions pilot requires
+the repository `OPENAI_API_KEY` secret; it does not run on pull requests.
+
+Build Sippion before a real run:
+
+```sh
+cargo build --release --locked
+```
+
+## Dry-run
+
+Dry-run performs no model call and validates the complete matrix, duplicate
+keys, pinned revisions, verifier presence, arm-specific configuration, and
+output path:
+
+```sh
+python3 eval/efficiency/run_pilot.py --dry-run
+```
+
+The default report must show `12` tasks, `4` arms, `5` runs per task/arm, and
+`240` executions. A filtered dry-run is useful for checking one task or arm.
+
+## Real Codex runs
+
+Run one smoke execution:
+
+```sh
+python3 eval/efficiency/run_pilot.py \
+  --task rust-01 --arm baseline --runs 1 \
+  --sippion-binary target/release/sippion
+```
+
+Run the full pilot:
+
+```sh
+python3 eval/efficiency/run_pilot.py \
+  --runs 5 --output eval/efficiency/results.jsonl \
+  --sippion-binary target/release/sippion
+```
+
+The runner stops on missing fixtures, missing verifiers, failed setup, missing
+Codex usage, malformed JSONL, or an unavailable CLI. A verifier failure is a
+real row with `correctness: false`; it disqualifies that task/arm regardless of
+token savings.
+
+Resume uses the same output file. Valid existing `(task, arm, run)` rows are
+reused and only missing executions are run. Duplicate, conflicting, malformed,
+unknown, or schema-incomplete rows fail closed; existing rows are never
+silently overwritten.
+
+## Result schema and usage accounting
+
+Every row has exactly this schema:
 
 ```json
-{"task":"task-a","arm":"full","run":1,"input_tokens":1200,"output_tokens":300,"cache_read_tokens":100,"correctness":true}
+{"task":"rust-01","arm":"full","run":1,"input_tokens":1200,"output_tokens":300,"cache_read_tokens":100,"correctness":true}
 ```
 
-`total_tokens` is computed as `input_tokens + output_tokens + cache_read_tokens`. Variance may be retained for diagnostics but is not a product success metric.
+The runner parses every Codex JSONL `turn.completed` event and sums its usage
+for the session. It requires `input_tokens`, `output_tokens`, and cached-input
+usage (flat `cached_input_tokens` or nested
+`input_tokens_details.cached_tokens`). It never uses the first event alone and
+never guesses a missing field. The scorer's definition remains:
 
-## Correctness gate
+```text
+total_tokens = input_tokens + output_tokens + cache_read_tokens
+```
 
-Use, in order:
+## Scoring and correctness gate
 
-1. existing repository tests
-2. hidden deterministic task verifier
-3. explicit security-regression checks where relevant
-
-Do not use an LLM judge. Exclude tasks whose requested behavior cannot be evaluated mechanically.
-
-Any correctness or security regression disqualifies an arm regardless of token savings. Among eligible arms, lower median total tokens wins. The scorer fails closed when a task/arm is missing the required run count or repeats a run id.
-
-The repository retrieval evaluator accepts both legacy labeled context atoms and the compact model-visible format. Output compaction therefore remains subject to the same mechanically checked evidence requirements instead of weakening the retrieval gate.
-
-## Scoring
-
-With five runs per task/arm:
+Run the deterministic scorer after a complete result set:
 
 ```sh
-python3 eval/efficiency/score.py results.jsonl
+python3 eval/efficiency/score.py eval/efficiency/results.jsonl
+python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json
 ```
 
-Machine-readable output:
+The scorer takes the median total tokens per task/arm, then the median across
+task medians. An arm is eligible only when every run for every task passes the
+correctness gate. Lower token use cannot compensate for a failed verifier.
 
-```sh
-python3 eval/efficiency/score.py results.jsonl --format json
-```
+## Tests and CI
 
-Scorer unit tests:
+No model call is made by these checks:
 
 ```sh
 python3 eval/efficiency/score_test.py
+python3 eval/efficiency/run_pilot_test.py
+python3 eval/efficiency/run_pilot.py --dry-run
 ```
 
-The scorer first computes each task/arm's median total tokens, then reports the median across task medians. Baseline comparisons are emitted only for arms that pass the correctness gate. No model judge or subjective score participates in winner selection.
+Pull-request CI runs syntax checks, deterministic unit tests, and the 240-run
+dry-run only. The real pilot workflow is `workflow_dispatch` only and uploads
+the JSONL results as an artifact. It fails clearly when the Actions secret is
+missing.
 
-## Completed packed-atom ablation
-
-The deterministic 10/6/4/3 ablation is complete. Results are stored in `atom-ablation.json`:
-
-- `10`: pass
-- `6`: pass
-- `4`: fail
-- `3`: fail
-
-The selected production cap is **6**, the smallest tested value that preserves the correctness/evidence gate. At cap 4, packed expected-path recall was `0.929` against the required `1.000`; cap 3 also failed the deterministic retrieval gate. Token savings cannot override those failures.
-
-## Remaining model ablations
-
-The end-task Codex pilot still needs to measure:
-
-- managed rule sentence removal
-- MCP server instruction sentence removal
-- model-visible context metadata removal
-- stronger same-path deduplication
-- smaller first-call context with progressive second-call retrieval
-
-A progressive retrieval variant is only a win when total session tokens fall, not merely when the first tool response is smaller.
-
-Real Codex runs require an `OPENAI_API_KEY` in the execution environment. Missing credentials must fail closed; do not replace Codex with a different model or synthetic usage estimate. Do not publish token-reduction claims until real model runs have completed under this protocol.
+At this revision no complete real-Codex pilot result is recorded, so this
+README makes no token-reduction claim.
