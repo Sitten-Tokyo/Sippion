@@ -28,6 +28,10 @@ fn workflow_touching_prs_are_excluded_from_trusted_author_auto_merge() {
     );
     assert!(
         source.contains("deny.toml"),
+        "auto-merge must treat the supply-chain policy config as sensitive"
+    );
+    assert!(
+        source.contains("deny.toml"),
         "auto-merge must treat the cargo-deny policy as sensitive"
     );
     assert!(
