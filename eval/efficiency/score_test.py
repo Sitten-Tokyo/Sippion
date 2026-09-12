@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 
-import importlib.util
 import unittest
-from pathlib import Path
 
-MODULE_PATH = Path(__file__).with_name("score.py")
-SPEC = importlib.util.spec_from_file_location("efficiency_score", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-score = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(score)
+import score
 
 
 def row(task: str, arm: str, run: int, total: int, correct: bool = True) -> str:
