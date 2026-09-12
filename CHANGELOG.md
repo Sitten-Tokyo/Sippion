@@ -2,7 +2,7 @@
 
 All notable user-visible changes to Sippion are tracked here. Historical detailed RC notes remain under `docs/history/`.
 
-## [Unreleased]
+## [0.1.0] - 2026-09-13
 
 ### Changed
 
@@ -65,6 +65,7 @@ All notable user-visible changes to Sippion are tracked here. Historical detaile
 
 - Added a `workflow_run` backstop so releases published by GitHub Actions still trigger strict post-publication verification despite `GITHUB_TOKEN` recursive-trigger suppression.
 
-[Unreleased]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.36...HEAD
+[Unreleased]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.36...v0.1.0
 [0.1.0-rc.36]: https://github.com/Sitten-Tokyo/Sippion/compare/v0.1.0-rc.35...v0.1.0-rc.36
 [0.1.0-rc.35]: https://github.com/Sitten-Tokyo/Sippion/releases/tag/v0.1.0-rc.35
