@@ -9,10 +9,9 @@ use crate::repo::{RepoMapEntry, SearchCoverage};
 
 const DATA_PREFIX: &str = "[UNTRUSTED CODE]\n";
 const INCOMPLETE_DATA_PREFIX: &str = "[UNTRUSTED CODE; INCOMPLETE]\n";
-// Keep broad repositories from turning semantic expansion into a large model-visible file list.
-// Ten atoms remain the conservative ceiling until the efficiency benchmark proves a smaller cap
-// preserves correctness.
-const MAX_PACKED_ATOMS: usize = 10;
+// The 10/6/4/3 deterministic ablation keeps six as the smallest cap that preserves the
+// packed expected-path and evidence gates. Caps four and three lose required packed paths.
+const MAX_PACKED_ATOMS: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
 struct ContextPackerWeights {
