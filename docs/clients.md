@@ -19,13 +19,13 @@ authentication, and fails closed when provenance cannot be verified.
 macOS / Linux:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/118ca8b136a3445d22850c04dd129e1e0e889b3f/scripts/bootstrap.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/118ca8b136a3445d22850c04dd129e1e0e889b3f/scripts/bootstrap.ps1 | iex
 ```
 
 The bootstrap URL is pinned to a specific Git commit instead of `main`. It

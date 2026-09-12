@@ -213,11 +213,11 @@ Set `SIPPION_STRICT_PROVENANCE=1` on the bootstrap to additionally verify
 GitHub artifact attestations before anything runs:
 
 ```sh
-SIPPION_STRICT_PROVENANCE=1 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/<PIN>/scripts/bootstrap.sh | sh
+SIPPION_STRICT_PROVENANCE=1 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/118ca8b136a3445d22850c04dd129e1e0e889b3f/scripts/bootstrap.sh | sh
 ```
 
 ```powershell
-$env:SIPPION_STRICT_PROVENANCE="1"; irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/<PIN>/scripts/bootstrap.ps1 | iex
+$env:SIPPION_STRICT_PROVENANCE="1"; irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/118ca8b136a3445d22850c04dd129e1e0e889b3f/scripts/bootstrap.ps1 | iex
 ```
 
 Strict mode requires a GitHub CLI with `gh attestation` support and working
