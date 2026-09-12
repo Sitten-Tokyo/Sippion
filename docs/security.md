@@ -185,33 +185,49 @@ repository, signer-workflow, and source-SHA policy used by installation.
 
 The README's bootstrap URL is pinned to an exact Sippion Git commit rather than
 `main`, so the bootstrap script referenced by the documentation cannot change
-when the branch moves. The bootstrap then:
+when the branch moves. The default bootstrap path verifies checksums only and
+needs no GitHub CLI or authentication. It then:
 
-1. asks GitHub CLI for the newest non-draft published Sippion release, including
-   prereleases;
-2. resolves that tag to one exact commit SHA and pins subsequent downloads to
-   the tag;
+1. asks for the newest non-draft published Sippion release, including
+   prereleases — via the GitHub CLI when available, otherwise via the public
+   release API (public listings never expose drafts);
+2. pins subsequent downloads to that tag;
 3. downloads the release installer and its `.sha256` file and verifies the
    installer SHA-256;
-4. **before executing the installer**, verifies the installer GitHub artifact
-   attestation against `Sitten-Tokyo/Sippion`, the release-draft signer workflow,
-   and the selected tag commit SHA;
-5. runs the release installer with binary artifact-attestation verification
-   explicitly required; and
-6. the release installer downloads the platform binary and matching `.sha256`
-   file, verifies the binary SHA-256, verifies its GitHub artifact attestation
-   against the release-build signer workflow and the same release commit SHA,
-   installs it for the current user, and runs transactional `sippion setup`.
+4. **before executing the installer**, runs it only after the checksum matches;
+5. runs the release installer with checksum verification of the platform binary
+   and matching `.sha256` file, installs it for the current user, and runs
+   transactional `sippion setup`.
 
-The default bootstrap therefore requires a GitHub CLI with `gh attestation`
-support and working GitHub authentication. If provenance verification cannot be
-performed or fails, installation stops before unverified installer code runs.
-`SIPPION_BOOTSTRAP_VERIFY_ONLY=1` succeeds only after installer provenance, not
-just its release-local checksum, has been verified.
+`SIPPION_BOOTSTRAP_VERIFY_ONLY=1` succeeds after the installer checksum has
+been verified.
 
 Checksums remain useful for corruption and mismatch detection, but they are not
 treated as an independent authenticity mechanism when both an artifact and its
-checksum come from the same release.
+checksum come from the same release. For independent provenance, use the strict
+mode below.
+
+### Strict provenance opt-in
+
+Set `SIPPION_STRICT_PROVENANCE=1` on the bootstrap to additionally verify
+GitHub artifact attestations before anything runs:
+
+```sh
+SIPPION_STRICT_PROVENANCE=1 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.sh | sh
+```
+
+```powershell
+$env:SIPPION_STRICT_PROVENANCE="1"; irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.ps1 | iex
+```
+
+Strict mode requires a GitHub CLI with `gh attestation` support and working
+GitHub authentication. It resolves the release through `gh`, resolves the tag
+to one exact commit SHA, verifies the installer GitHub artifact attestation
+against `Sitten-Tokyo/Sippion`, the release-draft signer workflow, and the
+selected tag commit SHA before executing the installer, and passes
+`SIPPION_REQUIRE_ATTESTATION=1` through so the binary attestation is verified
+the same way. If provenance verification cannot be performed or fails,
+installation stops before unverified installer code runs.
 
 ### Checksum-only explicit opt-out
 
@@ -224,7 +240,8 @@ environments where artifact provenance has already been verified through
 another trusted mechanism. In that mode the installer still verifies the
 published SHA-256 but emits a warning because release-local checksums alone do
 not provide independent authenticity if the release itself is compromised.
-The primary README bootstrap does not use this opt-out.
+The default README bootstrap behaves this way; set
+`SIPPION_STRICT_PROVENANCE=1` for the attested path described above.
 
 `SIPPION_RELEASE_TAG` pins binary downloads to one release. An explicit
 `SIPPION_RELEASE_BASE_URL` / `ReleaseBaseUrl` remains available for controlled

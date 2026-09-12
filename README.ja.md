@@ -1,13 +1,19 @@
 # Sippion
 
+[![Release](https://img.shields.io/github/v/release/Sitten-Tokyo/Sippion?label=release)](https://github.com/Sitten-Tokyo/Sippion/releases)
+[![CI](https://github.com/Sitten-Tokyo/Sippion/actions/workflows/ci.yml/badge.svg)](https://github.com/Sitten-Tokyo/Sippion/actions/workflows/ci.yml)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.Sitten--Tokyo%2Fsippion-blue)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.Sitten-Tokyo%2Fsippion/versions/latest)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](THIRD_PARTY_NOTICES.md)
+[![Rust](https://img.shields.io/badge/rust-1.85-orange)](rust-toolchain.toml)
+
 [English](README.md) | **日本語**
 
-**Less context. Less code. Fewer decisions.**
+**聞くべき場所を先に絞る。読むのは3ファイルでいい。**
 
-Sippion は、ローカル・読み取り専用MCPサーバーであり、AIコーディングのefficiency layer
-（効率化レイヤー）です。AIがリポジトリ全体を広く読む前に必要な箇所を絞り込み、
-新しいコードを書く前に既存実装を再利用しやすくし、不要な質問・抽象化・説明を減らします。
-目標は、**correctness（正しさ）と安全性を落とさず、モデルのトークン消費と人間の意思決定負荷を減らすこと**です。
+Sippion は、ローカル・読み取り専用MCPサーバーです。AIがファイルを開く前に、
+リポジトリの必要最小限だけを渡します。公開ツールは `repo_context` の1つ。
+関連コード断片と構造的な根拠を上限付きで返し、常時有効の小さな効率化ルールが
+不要な質問・抽象化・説明を抑えます。
 
 公開するMCPツールは `repo_context` の1つだけです。字句検索、構造情報、ソースコードだけを
 対象にした意味ランキングを組み合わせ、関連度の高い小さなコード断片を返します。
@@ -16,35 +22,23 @@ Sippion は、ローカル・読み取り専用MCPサーバーであり、AIコ�
 
 ## まずはインストール
 
-1コマンドでSippionをインストールできます。bootstrapは取得したinstallerについて、
-checksumに加えて **GitHub Artifact Attestation（その成果物が正規のGitHub Actionsから生成されたことの証明）**
-を**実行前に検証**します。その後installerが、選択したバイナリのchecksumと
-Artifact Attestationを検証してからインストールし、transactional（途中失敗時に元へ戻す方式）の
-`sippion setup` まで自動実行します。
-
-デフォルト経路は、GitHub CLI (`gh`) がインストール済みで、`gh attestation` に対応し、
-GitHubへ認証できない場合はfail closed（安全性を確認できなければ処理を止める方式）で停止します。
-メインのインストール導線ではprovenance（成果物の出所保証）を無効化しません。
+1コマンドです。GitHubアカウントも追加ツールも不要。実行前にchecksumを検証します。
 
 ### macOS / Linux
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.ps1 | iex
 ```
 
 インストール後はこうなります。
 
 ```text
-installer checksum + GitHub Artifact Attestationを検証
-    ↓
-バイナリchecksum + GitHub Artifact Attestationを検証
-    ↓
 Sippionをインストール
     ↓
 Codex + Claude Code + Antigravity + OpenCode に事前登録
@@ -52,26 +46,42 @@ Codex + Claude Code + Antigravity + OpenCode に事前登録
 各AIクライアントを再起動
 ```
 
-2段階のAttestation検証はいずれも、Sippionリポジトリだけでなく、期待するRelease workflowと、
-選択したRelease tagから解決した正確なcommit SHAまで固定して確認します。
+サプライチェーンの出所保証が必要な場合は、`SIPPION_STRICT_PROVENANCE=1` 付き
+（sh）／ `$env:SIPPION_STRICT_PROVENANCE="1"` 設定後（PowerShell）に実行すると、
+GitHub Artifact Attestationを実行前に検証します。詳細は
+[Security and trust boundary](docs/security.md) を参照してください。
 
 Sippionは、**4クライアントすべてに事前登録**します。今そのクライアントが
 インストールされていなくても設定は作られます。
 
-各クライアントはSippionを `--root-auto` で起動します。Sippionは現在位置から最も近い
-Git/project boundary（Gitまたはproject manifestで示されるプロジェクト境界）をルートに選びます。
-外側の `.git` を探すために、より近いproject manifestを越えて探索範囲を広げることはありません。
-またUnix系では、group/other-writable directory（同じグループや他ユーザーが書き込める共有ディレクトリ）を
-自動境界として信頼しません。ユーザーのhome directory（ホームディレクトリ）やfilesystem root
-（ファイルシステム最上位）を自動選択する場合もfail closedで拒否します。
-Windowsではstable safe Rust API（安定版Rustの安全なAPI）だけでは任意の共有ディレクトリのACL
-（アクセス制御リスト）を十分に検証できないため、`--root-auto` はcanonical current-user profile
-（正規化された現在ユーザーのプロファイル）配下に限定します。それ以外の信頼できるプロジェクトは
-明示的な `--root` で指定できます。通常の自動探索範囲では、リポジトリごとにSippionを登録し直す必要はありません。
+各クライアントはSippionを `--root-auto` で起動します。最も近いGit/project境界を
+ルートに選び、home directoryやfilesystem rootを自動選択することはありません。
+リポジトリごとに登録し直す必要はありません。境界ルールの詳細は
+[Security and trust boundary](docs/security.md) を参照してください。
 
-別の信頼できる方法でprovenanceを検証済みの管理環境向けには、checksumのみで進める
-明示的なopt-out（利用者が意図して検証を外す設定）もdirect installerに残しています。
-詳細は [Security and trust boundary](docs/security.md) を参照してください。
+## 60秒で試す
+
+初見のリポジトリで、エージェントにこう聞いてみてください。
+「auth tokenの検証はどこ？」
+
+Sippionなしでは、エージェントはリポジトリを総なめにして十数ファイルを開き、
+回答前にコンテキストを使い切ります。Sippionありでは、先に1つだけ聞きます。
+
+```text
+repo_context {"q":"authentication token validation"}
+```
+
+返るのは数件の上限付き断片（例: `src/auth/validate.rs:42-89`、
+`src/middleware/session.rs:12-40`）だけ。2ファイルを開いて回答します。
+先に絞る、あとで読む。それが製品のすべてです。
+
+|  | Grep / Glob | 常駐インデックス型 | Sippion |
+|---|---|---|---|
+| 導入 | なし | デーモン＋ディスク索引 | 1コマンド |
+| 新鮮さ | 常に最新 | 再索引ラグあり | 常に最新（RAMのみ） |
+| AIが見るもの | 素の一致 | リポジトリ丸投げの危険 | 上限付き断片 |
+| 提供中の通信 | n/a | 場合による | なし |
+| リポジトリへの書込 | なし | ある場合あり | なし |
 
 ## Official MCP Registry
 
@@ -280,6 +290,14 @@ version bumpが `main` に入った後、prereleaseを自動公開する場合�
 完全に同じcommitを指す `release/vX.Y.Z[-prerelease]` の一時branchを作ります。
 workflowがversionとtagを検証してprereleaseを公開し、成功後にそのbranchを削除します。
 手動draft releaseは、入力したtagと同じtag refからworkflowを起動しなければ拒否されます。
+
+安定版（例: `v0.1.0`）を切る場合: `Cargo.toml` を正確なversionに上げて `main` にmergeし、
+current `main` を指す一時branch `release/v0.1.0` をpushします。workflowの公開を待ってから
+prerelease扱いを外します。
+
+```sh
+gh release edit v0.1.0 --repo Sitten-Tokyo/Sippion --prerelease=false
+```
 
 ## Credits
 

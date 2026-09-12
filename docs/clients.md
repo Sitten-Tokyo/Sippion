@@ -8,37 +8,40 @@ normally loaded at startup.
 
 ## Install
 
-The default path requires the GitHub CLI (`gh`) with `gh attestation` support
-and working GitHub authentication. Installation fails closed if either the
-release installer or selected release binary cannot be verified against the
-expected Sippion GitHub artifact attestation provenance.
+The default path needs no GitHub CLI or authentication. It verifies the
+published SHA-256 checksums of the release installer and the selected release
+binary before running anything. For GitHub artifact-attestation provenance,
+set `SIPPION_STRICT_PROVENANCE=1` (sh) or
+`$env:SIPPION_STRICT_PROVENANCE="1"` (PowerShell); strict mode requires the
+GitHub CLI (`gh`) with `gh attestation` support and working GitHub
+authentication, and fails closed when provenance cannot be verified.
 
 macOS / Linux:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89dd59db89ccf00940185f/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.ps1 | iex
 ```
 
 The bootstrap URL is pinned to a specific Git commit instead of `main`. It
-selects one non-draft published Sippion release, resolves its tag to an exact
-commit SHA, verifies the release installer checksum, and **verifies the
-installer GitHub artifact attestation before executing it**. The attestation is
-bound to the Sippion repository, the expected release-draft signer workflow,
-and the selected release commit SHA.
+selects one non-draft published Sippion release and verifies the release
+installer checksum before executing it. With `SIPPION_STRICT_PROVENANCE=1` it
+additionally resolves the tag to an exact commit SHA and verifies the
+installer GitHub artifact attestation, bound to the Sippion repository, the
+expected release-draft signer workflow, and the selected release commit SHA.
 
-The release installer then verifies the matching platform binary checksum and
-GitHub artifact attestation against the expected release-build signer workflow
-and the same source commit, installs Sippion in the current user scope, and runs
-transactional `sippion setup`.
+The release installer then verifies the matching platform binary checksum
+(plus its GitHub artifact attestation in strict mode), installs Sippion in the
+current user scope, and runs transactional `sippion setup`.
 
-A checksum-only direct-installer mode is retained only as an explicit opt-out
-for controlled environments where provenance was verified by another trusted
+Direct use of the release installer keeps strict attestation verification on
+by default; `SIPPION_REQUIRE_ATTESTATION=0` remains an explicit opt-out for
+controlled environments where provenance was verified by another trusted
 mechanism. See [Security and trust boundary](security.md) for the exact trust
 model.
 
