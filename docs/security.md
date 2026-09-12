@@ -188,9 +188,9 @@ The README's bootstrap URL is pinned to an exact Sippion Git commit rather than
 when the branch moves. The default bootstrap path verifies checksums only and
 needs no GitHub CLI or authentication. It then:
 
-1. asks the public GitHub release API for the newest non-draft published
-   Sippion release, including prereleases (public listings never expose
-   drafts);
+1. asks for the newest non-draft published Sippion release, including
+   prereleases — via the GitHub CLI when available, otherwise via the public
+   release API (public listings never expose drafts);
 2. pins subsequent downloads to that tag;
 3. downloads the release installer and its `.sha256` file and verifies the
    installer SHA-256;

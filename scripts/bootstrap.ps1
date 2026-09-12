@@ -41,15 +41,16 @@ $originalAttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
-    if ($strict) {
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if ($strict -or $gh) {
         $tag = (& gh release list --repo $repo --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName').Trim()
         if ($LASTEXITCODE -ne 0) {
             throw "Could not resolve a valid non-draft published Sippion release tag."
         }
     }
     else {
-        # Without strict provenance, deliberately use the public unauthenticated
-        # endpoint. Public release listing never exposes drafts.
+        # Without gh, deliberately use the public unauthenticated endpoint.
+        # Public release listing never exposes drafts.
         $headers = @{
             Accept = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2026-03-10"

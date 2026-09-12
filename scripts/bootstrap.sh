@@ -53,13 +53,13 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/sippion-bootstrap.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 resolve_published_tag() {
-  if [ "$SIPPION_STRICT_PROVENANCE" = "1" ]; then
+  if [ "$SIPPION_STRICT_PROVENANCE" = "1" ] || command -v gh >/dev/null 2>&1; then
     gh release list --repo "$repo" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName'
     return
   fi
 
-  # Without strict provenance, deliberately use the public unauthenticated
-  # endpoint. Public release listing never exposes drafts.
+  # Without gh, deliberately use the public unauthenticated endpoint. Public
+  # release listing never exposes drafts.
   release_json="$tmp/releases.json"
   curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
     -H 'Accept: application/vnd.github+json' \
