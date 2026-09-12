@@ -570,7 +570,14 @@ mod tests {
             ..SearchCoverage::default()
         };
         let packed = pack_context(&query(), &entries, &excerpts, "", &coverage);
-        for hidden in ["confidence=", "rank=", "body_b=", "target_t=", "hard_b=", "scan_b="] {
+        for hidden in [
+            "confidence=",
+            "rank=",
+            "body_b=",
+            "target_t=",
+            "hard_b=",
+            "scan_b=",
+        ] {
             assert!(!packed.text.contains(hidden), "leaked metadata: {hidden}");
         }
     }

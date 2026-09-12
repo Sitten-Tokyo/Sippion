@@ -174,9 +174,10 @@ mod tests {
         .normalize()
         .expect("query");
         let output = service.context(&query, None, None).expect("context");
+        assert!(output.contains("[UNTRUSTED CODE; INCOMPLETE]"));
         assert!(output.contains("[NO_MATCH_IN_SEARCHABLE_SET:"));
-        assert!(output.contains("excluded=1"));
-        assert!(output.contains("CTX v=4"));
+        assert!(!output.contains("excluded="));
+        assert!(!output.contains("CTX v="));
 
         drop(service);
         std::fs::remove_dir_all(&root).expect("cleanup");

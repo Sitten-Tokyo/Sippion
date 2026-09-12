@@ -63,7 +63,8 @@ fn query_missing_marker(root: &std::path::Path) -> String {
 }
 
 fn assert_complete_no_match(text: &str) {
-    assert!(text.contains("excluded=0"));
+    assert!(!text.contains("excluded="));
+    assert!(!text.contains("CTX v="));
     assert!(text.contains("\n[NO_MATCH]\n"));
     assert!(!text.contains("NO_MATCH_IN_SEARCHABLE_SET"));
 }
