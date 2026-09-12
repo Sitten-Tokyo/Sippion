@@ -636,8 +636,15 @@ fn validate_legacy_initialize(params: &Value) -> Result<(), RpcError> {
     let Some(protocol) = object.get("protocolVersion").and_then(Value::as_str) else {
         return Err(RpcError::new(-32602, "missing legacy MCP protocolVersion"));
     };
-    if protocol.is_empty() {
-        return Err(RpcError::new(-32602, "invalid legacy MCP protocolVersion"));
+    // Sippion implements exactly one legacy revision. Accepting any non-empty string would let a
+    // client negotiate a version whose semantics differ from what the server implements.
+    if protocol != LEGACY_MCP_VERSION {
+        return Err(
+            RpcError::new(-32602, "unsupported legacy MCP protocol version").with_data(json!({
+                "supported": [LEGACY_MCP_VERSION],
+                "requested": protocol
+            })),
+        );
     }
     if !object.get("capabilities").is_some_and(Value::is_object) {
         return Err(RpcError::new(
