@@ -2,13 +2,7 @@ name: Efficiency benchmark scorer
 
 on:
   push:
-    paths:
-      - 'eval/efficiency/**'
-      - '.github/workflows/efficiency-eval.yml'
   pull_request:
-    paths:
-      - 'eval/efficiency/**'
-      - '.github/workflows/efficiency-eval.yml'
   workflow_dispatch:
 
 permissions:
