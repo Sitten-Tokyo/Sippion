@@ -79,13 +79,44 @@ fn context_guidance_switches_to_native_tools_after_narrowing() {
 fn legacy_initialize_negotiates_to_the_supported_legacy_revision() {
     let initialized = AtomicBool::new(false);
     let params = json!({
-        "protocolVersion": "2025-06-18",
+        "protocolVersion": LEGACY_MCP_VERSION,
         "capabilities": {},
         "clientInfo": {"name": "test", "version": "1"}
     });
     let result = legacy_initialize(&params, &initialized).expect("legacy version negotiation");
     assert_eq!(result["protocolVersion"], LEGACY_MCP_VERSION);
     assert!(initialized.load(AtomicOrdering::Acquire));
+}
+
+#[test]
+fn legacy_initialize_rejects_unsupported_protocol_version() {
+    for unsupported in ["2025-06-18", "2024-11-05", "", "2099-01-01"] {
+        let initialized = AtomicBool::new(false);
+        let params = json!({
+            "protocolVersion": unsupported,
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"}
+        });
+        let error = legacy_initialize(&params, &initialized)
+            .expect_err("unsupported legacy version must fail");
+        assert_eq!(error.code, -32602);
+        assert!(
+            error
+                .data
+                .as_ref()
+                .and_then(|data| data["requested"].as_str())
+                == Some(unsupported),
+            "unsupported version error must echo the requested version"
+        );
+        assert_eq!(
+            error.data.as_ref().map(|data| data["supported"].clone()),
+            Some(json!([LEGACY_MCP_VERSION]))
+        );
+        assert!(
+            !initialized.load(AtomicOrdering::Acquire),
+            "failed legacy negotiation must not mark the connection initialized"
+        );
+    }
 }
 
 #[test]

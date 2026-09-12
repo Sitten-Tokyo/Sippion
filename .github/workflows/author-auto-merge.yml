@@ -3,6 +3,9 @@ name: Merge trusted author after CI
 # This workflow is evaluated from the default branch and never checks out pull-request contents.
 # A trusted-author PR can merge only after CI and every path-applicable smoke workflow have
 # succeeded for the exact head. The CI artifact records the exact base/head pair that was tested.
+# PRs touching security-sensitive validation paths (.github/workflows/**, zizmor.yml) are never
+# auto-merged: CI executes workflow and script contents from the PR head, so such a PR could
+# otherwise rewrite its own validators and manufacture the success signals trusted below.
 on:
   workflow_run:
     workflows:
@@ -94,7 +97,18 @@ jobs:
             --jq '.[].filename')"
           require_bootstrap=0
           require_release=0
+          sensitive_validation_path=0
           while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/*|zizmor.yml|deny.toml|scripts/check-bootstrap-pins.py)
+                # Evaluated from the default branch, so a PR cannot weaken this exclusion by
+                # editing this workflow itself. CI and smoke gates run PR-head contents and must
+                # never be the sole reviewer of changes to the validation they implement.
+                # deny.toml (cargo-deny policy) and check-bootstrap-pins.py (README pin verifier)
+                # are validation configs/scripts: a PR rewriting them could manufacture CI success.
+                sensitive_validation_path=1
+                ;;
+            esac
             case "$path" in
               scripts/bootstrap.sh|scripts/bootstrap.ps1|scripts/install.sh|scripts/install.ps1|.github/workflows/bootstrap-smoke.yml)
                 require_bootstrap=1
@@ -106,6 +120,12 @@ jobs:
                 ;;
             esac
           done <<<"$changed_files"
+
+          if [[ "$sensitive_validation_path" -eq 1 ]]; then
+            echo "PR touches security-sensitive validation paths; trusted-author auto-merge is disabled and manual review is required."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           runs_json="$(gh api \
             "repos/${REPOSITORY}/actions/runs?head_sha=${RUN_HEAD_SHA}&event=pull_request&per_page=100")"

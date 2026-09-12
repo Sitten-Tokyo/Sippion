@@ -803,6 +803,24 @@ fn parent_directory_symlink_is_refused() {
     assert!(repository.read_source("alias/file.rs").is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn symlink_with_trailing_slash_target_cannot_escape_parent_walk() {
+    use std::os::unix::fs::symlink;
+    let root = temp_root("slash-target-link");
+    let outside = temp_root("slash-target-outside");
+    std::fs::create_dir_all(&root).expect("temp root");
+    std::fs::create_dir_all(&outside).expect("outside");
+    std::fs::write(outside.join("secret.rs"), "fn outside_secret() {}\n").expect("write outside");
+    // The symlink target string itself ends in `/`, so the caller's path needs no trailing slash
+    // for a trailing-slash O_NOFOLLOW bypass to follow this link outside the project root.
+    // Parent-directory traversal must refuse it rather than resolve outside.
+    symlink(outside.join(""), root.join("indirect")).expect("create symlink");
+
+    let repository = RepositoryAccess::open(&root).expect("open repository");
+    assert!(repository.read_source("indirect/secret.rs").is_err());
+}
+
 #[test]
 fn regular_file_still_reads_after_nofollow_hardening() {
     let root = temp_root("regular");

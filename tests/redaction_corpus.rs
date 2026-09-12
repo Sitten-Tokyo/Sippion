@@ -31,8 +31,28 @@ fn provider_secret_corpus() -> Vec<String> {
             "abcdefghijklmnopqrstuvwxyz0123456789",
         ),
         (
+            &[103, 104, 111, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
+        (
+            &[103, 104, 117, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
+        (
+            &[103, 104, 115, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
+        (
+            &[103, 104, 114, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
+        (
             &[103, 108, 112, 97, 116, 45][..],
             "abcdefghijklmnopqrstuvwxyz012345",
+        ),
+        (
+            &[120, 111, 120, 97, 45][..],
+            "123456789012-123456789012-abcdefghijklmnopqrstuvwx",
         ),
         (
             &[120, 111, 120, 98, 45][..],
@@ -42,9 +62,21 @@ fn provider_secret_corpus() -> Vec<String> {
             &[120, 111, 120, 112, 45][..],
             "123456789012-123456789012-abcdefghijklmnopqrstuvwx",
         ),
+        (
+            &[120, 111, 120, 115, 45][..],
+            "123456789012-123456789012-abcdefghijklmnopqrstuvwx",
+        ),
         (&[65, 73, 122, 97][..], "SyA1234567890abcdefghijklmnop"),
         (&[65, 75, 73, 65][..], "1234567890ABCDEF"),
         (&[65, 83, 73, 65][..], "1234567890ABCDEF"),
+        (
+            &[115, 107, 95, 108, 105, 118, 101, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
+        (
+            &[115, 107, 95, 116, 101, 115, 116, 95][..],
+            "abcdefghijklmnopqrstuvwxyz0123456789",
+        ),
         (&[115, 107, 45][..], "abcdefghijklmnopqrstuvwxyz0123456789"),
     ]
     .into_iter()
