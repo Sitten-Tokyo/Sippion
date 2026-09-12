@@ -6,18 +6,14 @@ not current installation instructions or release approval; use the root
 
 ## Change records
 
-- [RC25](CHANGES_RC25.md)
-- [RC26](CHANGES_RC26.md)
-- [RC27](CHANGES_RC27.md)
+- [RC25–RC27](CHANGES_RC25-RC27.md) (consolidated)
 - [RC28](CHANGES_RC28.md)
 - [RC29](CHANGES_RC29.md)
 - [RC30](CHANGES_RC30.md)
 
 ## Validation records
 
-- [RC26](VALIDATION_RC26.md)
-- [RC27](VALIDATION_RC27.md)
-- [RC28](VALIDATION_RC28.md)
+- [RC26–RC28](VALIDATION_RC26-RC28.md) (consolidated)
 - [RC29](VALIDATION_RC29.md)
 
 ## Follow-up notes
