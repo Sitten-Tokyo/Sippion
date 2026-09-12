@@ -79,7 +79,7 @@ Priority:
 
 If an evidence excerpt already makes the same file's structure clear, do not separately emit its structure atom.
 
-Ablate packed atom limits at 10, 6, 4, and 3. Select the smallest limit that preserves the repository's deterministic correctness/evidence gates, then validate the selected limit again in the end-task model benchmark.
+The deterministic 10/6/4/3 packed-atom ablation selected **6** as the production cap. Caps 10 and 6 passed the full deterministic gate; caps 4 and 3 failed the retrieval evidence gate. At cap 4, packed expected-path recall fell to `0.929` against the required `1.000`, so smaller caps are disqualified regardless of potential token savings. The machine-readable result is stored in `eval/efficiency/atom-ablation.json`.
 
 Prefer progressive disclosure: make the first response small and allow a second `repo_context` call when needed. This is only a win when session-level total tokens are lower.
 
@@ -130,7 +130,7 @@ Arms:
 
 Pilot with 12 tasks: 4 TypeScript/React, 4 Python, 4 Rust, including at least one monorepo. Cover bug fixes, features, refactors, reviews, dependency temptations, abstraction temptations, ambiguity, and security. Include both ambiguity cases where asking one question is correct and cases where choosing a reasonable default is correct.
 
-Do not publish a token-reduction claim until real Codex runs complete under this protocol. After the pilot is stable, expand to 30 tasks.
+The real Codex pilot requires an `OPENAI_API_KEY` Actions secret. Missing credentials must block the model run rather than silently substituting a different model or synthetic token estimate. Do not publish a token-reduction claim until real Codex runs complete under this protocol. After the pilot is stable, expand to 30 tasks.
 
 ## Upstream tracking
 
