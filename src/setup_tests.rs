@@ -261,6 +261,8 @@ fn opencode_doctor_accepts_current_global_config() {
 #[test]
 fn efficiency_rule_is_compact_and_preserves_core_guards() {
     assert!(EFFICIENCY_RULE.contains("smallest correct solution"));
+    assert!(EFFICIENCY_RULE.contains("Fix root causes"));
+    assert!(EFFICIENCY_RULE.contains("affected callers"));
     assert!(EFFICIENCY_RULE.contains("security"));
     assert!(EFFICIENCY_RULE.contains("one concise question"));
     assert!(EFFICIENCY_RULE.contains("no preamble"));

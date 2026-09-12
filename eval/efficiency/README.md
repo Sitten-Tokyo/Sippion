@@ -67,17 +67,27 @@ python3 eval/efficiency/score_test.py
 
 The scorer first computes each task/arm's median total tokens, then reports the median across task medians. Baseline comparisons are emitted only for arms that pass the correctness gate. No model judge or subjective score participates in winner selection.
 
-## Ablations
+## Completed packed-atom ablation
 
-At minimum test:
+The deterministic 10/6/4/3 ablation is complete. Results are stored in `atom-ablation.json`:
+
+- `10`: pass
+- `6`: pass
+- `4`: fail
+- `3`: fail
+
+The selected production cap is **6**, the smallest tested value that preserves the correctness/evidence gate. At cap 4, packed expected-path recall was `0.929` against the required `1.000`; cap 3 also failed the deterministic retrieval gate. Token savings cannot override those failures.
+
+## Remaining model ablations
+
+The end-task Codex pilot still needs to measure:
 
 - managed rule sentence removal
 - MCP server instruction sentence removal
 - model-visible context metadata removal
-- packed atom limits: 10, 6, 4, 3
 - stronger same-path deduplication
 - smaller first-call context with progressive second-call retrieval
 
 A progressive retrieval variant is only a win when total session tokens fall, not merely when the first tool response is smaller.
 
-Do not publish token-reduction claims until real model runs have completed under this protocol.
+Real Codex runs require an `OPENAI_API_KEY` in the execution environment. Missing credentials must fail closed; do not replace Codex with a different model or synthetic usage estimate. Do not publish token-reduction claims until real model runs have completed under this protocol.
