@@ -1,0 +1,71 @@
+name: Context atom ablation
+
+on:
+  pull_request:
+    paths:
+      - 'src/service/context.rs'
+      - 'src/service.rs'
+      - 'scripts/retrieval-eval.py'
+      - 'eval/**'
+      - '.github/workflows/context-atom-ablation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atom-cap:
+    name: atom-cap-${{ matrix.cap }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cap: [10, 6, 4, 3]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set packed atom cap
+        env:
+          ATOM_CAP: ${{ matrix.cap }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('src/service/context.rs')
+          text = path.read_text()
+          marker = 'const MAX_PACKED_ATOMS: usize = '
+          lines = [line for line in text.splitlines() if line.startswith(marker)]
+          if len(lines) != 1:
+              raise SystemExit(f'expected exactly one atom-cap constant, found {len(lines)}')
+          old = lines[0]
+          cap = int(os.environ['ATOM_CAP'])
+          if cap not in {10, 6, 4, 3}:
+              raise SystemExit(f'unexpected atom cap: {cap}')
+          path.write_text(text.replace(old, f'{marker}{cap};', 1))
+          PY
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run deterministic retrieval evaluation
+        run: python3 scripts/retrieval-eval.py --binary target/release/sippion
