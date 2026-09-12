@@ -191,3 +191,78 @@ fn managed_file_symlinks_are_rejected() {
     assert!(error.contains("symlinked managed file"));
     assert_eq!(fs::read_to_string(real).unwrap(), "{}\n");
 }
+
+#[test]
+fn opencode_server_preserves_other_config_and_is_removable() {
+    let path = temp_dir().join("opencode.json");
+    fs::write(
+        &path,
+        r#"{"model":"example/model","mcp":{"other":{"type":"remote","url":"https://example.invalid/mcp"}}}"#,
+    )
+    .expect("write");
+    let entry = json!({
+        "type": "local",
+        "command": ["/tmp/sippion", "mcp", "--root-auto"],
+        "cwd": "."
+    });
+    assert_eq!(
+        upsert_opencode_server(&path, entry).unwrap(),
+        FileChange::Updated
+    );
+    let value = read_optional_json(&path).unwrap().unwrap();
+    assert_eq!(value["model"], "example/model");
+    assert!(value["mcp"]["other"].is_object());
+    assert!(is_current_sippion_opencode_entry(&value["mcp"]["sippion"]));
+    assert_eq!(remove_opencode_server(&path).unwrap(), FileChange::Updated);
+    let value = read_optional_json(&path).unwrap().unwrap();
+    assert!(value["mcp"]["other"].is_object());
+    assert!(value["mcp"]["sippion"].is_null());
+}
+
+#[test]
+fn opencode_uninstall_does_not_remove_unowned_sippion_entry() {
+    let path = temp_dir().join("opencode.json");
+    fs::write(
+        &path,
+        r#"{"mcp":{"sippion":{"type":"local","command":["other-tool","mcp"]}}}"#,
+    )
+    .expect("write");
+    assert_eq!(
+        remove_opencode_server(&path).unwrap(),
+        FileChange::Unchanged
+    );
+    let value = read_optional_json(&path).unwrap().unwrap();
+    assert_eq!(value["mcp"]["sippion"]["command"][0], "other-tool");
+}
+
+#[test]
+fn setup_targets_include_opencode_config_and_rule() {
+    let home = temp_dir();
+    let targets = setup_target_paths(&home);
+    assert!(targets.contains(&home.join(".config").join("opencode").join("opencode.json")));
+    assert!(targets.contains(&home.join(".config").join("opencode").join("AGENTS.md")));
+}
+
+#[test]
+fn opencode_doctor_accepts_current_global_config() {
+    let home = temp_dir();
+    let executable = home.join("bin").join(if cfg!(windows) {
+        "sippion.exe"
+    } else {
+        "sippion"
+    });
+    assert_eq!(
+        setup_opencode(&home, &executable).unwrap(),
+        FileChange::Updated
+    );
+    assert_eq!(check_opencode(&home, &executable), CheckStatus::Ok);
+}
+
+#[test]
+fn efficiency_rule_is_compact_and_preserves_core_guards() {
+    assert!(EFFICIENCY_RULE.contains("smallest correct solution"));
+    assert!(EFFICIENCY_RULE.contains("security"));
+    assert!(EFFICIENCY_RULE.contains("one concise question"));
+    assert!(EFFICIENCY_RULE.contains("no preamble"));
+    assert!(EFFICIENCY_RULE.len() < 1_400);
+}

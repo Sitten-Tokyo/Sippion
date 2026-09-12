@@ -2,14 +2,17 @@
 
 [English](README.md) | **日本語**
 
-Sippion は、AIコーディングエージェントがリポジトリ全体を闇雲に読む前に、
-**必要そうな箇所を絞り込むためのローカル・読み取り専用MCPサーバー**です。主目的は、
-**AIへ渡す前のリポジトリコンテキストを整理・上限化し、不要なモデル入力トークンの消費を減らすこと**です。
-必要な根拠を落とさず、関係の薄いソースをモデルへ大量投入しないことを最適化目標にしています。
+**Less context. Less code. Fewer decisions.**
 
-公開するツールは `repo_context` の1つだけです。字句検索、構造情報、
-ソースコードだけを対象にした意味ランキングを組み合わせ、関連度の高い小さな
-コード断片を返します。
+Sippion は、ローカル・読み取り専用MCPサーバーであり、AIコーディングのefficiency layer
+（効率化レイヤー）です。AIがリポジトリ全体を広く読む前に必要な箇所を絞り込み、
+新しいコードを書く前に既存実装を再利用しやすくし、不要な質問・抽象化・説明を減らします。
+目標は、**correctness（正しさ）と安全性を落とさず、モデルのトークン消費と人間の意思決定負荷を減らすこと**です。
+
+公開するMCPツールは `repo_context` の1つだけです。字句検索、構造情報、ソースコードだけを
+対象にした意味ランキングを組み合わせ、関連度の高い小さなコード断片を返します。
+`sippion setup` は対応クライアントへ、常時有効の小さなefficiency rule（効率化ルール）も設定します。
+別モードや実行時のupstream prompt取得はありません。
 
 ## まずはインストール
 
@@ -44,7 +47,7 @@ installer checksum + GitHub Artifact Attestationを検証
     ↓
 Sippionをインストール
     ↓
-Codex + Claude Code + Antigravity に事前登録
+Codex + Claude Code + Antigravity + OpenCode に事前登録
     ↓
 各AIクライアントを再起動
 ```
@@ -52,7 +55,7 @@ Codex + Claude Code + Antigravity に事前登録
 2段階のAttestation検証はいずれも、Sippionリポジトリだけでなく、期待するRelease workflowと、
 選択したRelease tagから解決した正確なcommit SHAまで固定して確認します。
 
-Sippionは、**3クライアントすべてに事前登録**します。今そのクライアントが
+Sippionは、**4クライアントすべてに事前登録**します。今そのクライアントが
 インストールされていなくても設定は作られます。
 
 各クライアントはSippionを `--root-auto` で起動します。Sippionは現在位置から最も近い
@@ -88,8 +91,8 @@ sippion-macos-x86_64.mcpb
 ```
 
 MCPB manifestはhost側に明示的なproject rootを要求し、同じlocal stdio serverを起動します。
-Codex、Claude Code、Antigravityの設定まで自動で行いたい場合は、上のbootstrap + `sippion setup`
-経路を引き続き推奨します。Registry/MCPBは、標準化された追加のdiscovery / install channelです。
+Codex、Claude Code、Antigravity、OpenCodeの設定まで自動で行いたい場合は、上のbootstrap +
+`sippion setup` 経路を引き続き推奨します。Registry/MCPBは、標準化された追加のdiscovery / install channelです。
 
 ## Sippionは何をするの？
 
@@ -100,7 +103,9 @@ repo_context {"q":"authentication token validation"}
 ```
 
 Sippionはリポジトリの大部分をそのままAIへ渡すのではなく、関連するコード断片と
-構造的な根拠を、上限付きで返します。
+構造的な根拠を、上限付きで返します。内部のranking score（順位付けスコア）やbudget metadata
+（予算管理用の付随情報）は、correctnessのために必要でない限りAIには見せません。
+AIが受け取るのは、主にpath、line range、根拠コード、必要最小限の不完全検索状態です。
 
 イメージは次のとおりです。
 
@@ -117,6 +122,22 @@ AIが必要なソースファイルを通常どおり読む
 
 `session_id` と `agent_id` を指定すると、協調する複数エージェントの状態を
 プロセスメモリ上で共有できます。この情報は永続化されません。
+
+## Efficiency layer（効率化レイヤー）
+
+同じ指示を何度もAIへ読ませないため、Sippionは責務を3つに分けます。
+
+1. MCP server instruction（MCPサーバー指示）は、いつ `repo_context` を使い、いつ通常のfile readへ戻るかだけを伝えます。
+2. `repo_context` はrankingの内部事情を見せず、次の判断に必要な最小のリポジトリ根拠を返します。
+3. managed global rule（Sippionが管理する共通ルール）は、最小の正しい実装、既存コード再利用、不要な抽象化・選択肢の削減、安全性維持、短い回答を求めます。
+
+このルールは常時有効です。lite/full/ultraのような切り替え、Node hook、実行時のupstream取得はありません。
+詳しい設計は [Efficiency layer](docs/efficiency-layer.md) にあります。
+
+トークン削減はcorrectnessを維持した場合だけ改善として扱います。
+[Efficiency benchmark pilot](eval/efficiency/README.md) は4条件、task/armごと5回、
+deterministic check（機械的に一意判定できる検証）とtotal model tokensだけで評価します。
+LLM judge（別AIによる採点）は使いません。実モデルでこのprotocolを完走するまでは、削減率を公開値として主張しません。
 
 ## 安全性
 
@@ -140,11 +161,12 @@ Sippionは、リポジトリ内のコードを実行しません。モデル通�
 
 ## 対応AIクライアント
 
-`sippion setup` は現在のユーザーに対して次の3つを設定します。
+`sippion setup` は現在のユーザーに対して次の4つを設定します。
 
 - Codex
 - Claude Code
 - Antigravity
+- OpenCode
 
 すでに起動しているクライアントは、MCP設定を読み直すためインストール後に再起動してください。
 
@@ -229,6 +251,7 @@ cargo fmt --check
 cargo build --release --locked
 cargo test --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
+python3 eval/efficiency/score_test.py
 ```
 
 CIではさらに `Cargo.lock` をRustSec advisory databaseに対して監査します。
@@ -258,12 +281,23 @@ version bumpが `main` に入った後、prereleaseを自動公開する場合�
 workflowがversionとtagを検証してprereleaseを公開し、成功後にそのbranchを削除します。
 手動draft releaseは、入力したtagと同じtag refからworkflowを起動しなければ拒否されます。
 
+## Credits
+
+Sippionのcompact efficiency behavior（小さな効率化ルール）は
+[Ponytail](https://github.com/DietrichGebert/ponytail) と
+[i-have-adhd](https://github.com/ayghri/i-have-adhd) にInspired by（着想を得ています）。
+両プロジェクトをvendorせず、Sippion向けに書き直した常時有効ルールを使用します。
+確認済みupstream commitは `upstream.toml` に固定し、ライセンス情報は
+[Third-party notices](THIRD_PARTY_NOTICES.md) に記載しています。
+
 ## ドキュメント
 
 - [English README](README.md)
 - [Architecture](docs/architecture.md)
 - [Security and trust boundary](docs/security.md)
 - [Client setup](docs/clients.md)
+- [Efficiency layer](docs/efficiency-layer.md)
+- [Efficiency benchmark pilot](eval/efficiency/README.md)
 - [Integration boundaries](docs/integrations.md)
 - [Historical RC changes and validation](docs/history/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

@@ -11,11 +11,9 @@ function assert(condition, message) {
 }
 
 function assertCompactContextContract(text) {
-  const header = text.split('\n').find((line) => line.includes('CTX v=4 '));
-  assert(header, 'compact CTX v=4 header missing');
-  assert(/\btarget_t=\d+\b/.test(header), 'compact context target token budget missing');
-  assert(/\bhard_b=\d+\b/.test(header), 'compact context hard byte budget missing');
-  assert(/\bscan_b=\d+\b/.test(header), 'compact context scan byte metadata missing');
+  assert(text.startsWith('[UNTRUSTED CODE]\n'), 'compact untrusted-code prefix missing');
+  assert(!text.includes('CTX v='), 'legacy CTX metadata must not be model-visible');
+  assert(!/\b(?:confidence|excluded|target_t|hard_b|scan_b)=/.test(text), 'legacy context metadata must not be model-visible');
 }
 
 async function runClient(options, expectedEra) {
@@ -44,8 +42,8 @@ async function runClient(options, expectedEra) {
     assert(text.includes('src/auth.rs'), 'repo_context did not return expected fixture path');
 
     // The assertions above exercise MCP negotiation, discovery, and tool invocation through the
-    // official client. This separate check guards Sippion's compact model-visible context contract;
-    // it intentionally does not depend on removed internal metadata such as `PACK adaptive=true`.
+    // official client. This separate check guards Sippion's compact model-visible context contract
+    // and ensures removed internal budget/ranking metadata does not creep back into model input.
     assertCompactContextContract(text);
   } finally {
     await client.close();

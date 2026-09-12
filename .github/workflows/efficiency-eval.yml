@@ -1,0 +1,25 @@
+name: Efficiency benchmark scorer
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scorer:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate scorer syntax
+        run: python3 -m py_compile eval/efficiency/score.py eval/efficiency/score_test.py
+
+      - name: Run scorer unit tests
+        working-directory: eval/efficiency
+        run: python3 -m unittest score_test.py

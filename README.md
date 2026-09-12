@@ -2,15 +2,19 @@
 
 **English** | [日本語](README.ja.md)
 
-Sippion is a local, read-only MCP server that helps AI coding agents find the
-right parts of a repository before they start opening source files broadly. Its primary
-job is to organize and bound repository context **before it is passed to an AI model**, so
-clients avoid spending model-input tokens on irrelevant source while preserving the
-evidence needed to solve the task.
+**Less context. Less code. Fewer decisions.**
 
-Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical search,
-structural context, and source-only semantic ranking to return a small,
-relevant set of code excerpts.
+Sippion is a local, read-only MCP server and AI coding efficiency layer. It helps
+coding agents narrow repository context before broad file reads, reuse existing
+implementations before adding code, and avoid unnecessary questions,
+abstractions, and output. The objective is to reduce model tokens and human
+decision burden without trading away correctness or safety.
+
+Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical
+search, structural context, and source-only semantic ranking to return a small,
+relevant set of code excerpts. `sippion setup` also installs one compact,
+always-on efficiency rule for supported clients; there are no separate modes or
+runtime prompt downloads.
 
 ## Quick start
 
@@ -45,7 +49,7 @@ verify binary checksum + GitHub artifact attestation
     ↓
 Sippion installed
     ↓
-Codex + Claude Code + Antigravity pre-registered
+Codex + Claude Code + Antigravity + OpenCode pre-registered
     ↓
 Restart those AI clients
 ```
@@ -54,7 +58,7 @@ Both attestation checks are bound to the Sippion repository, the expected
 release signer workflow, and the exact commit SHA resolved from the selected
 release tag.
 
-Sippion pre-registers **all three clients**, even if one is not installed yet.
+Sippion pre-registers **all four clients**, even if one is not installed yet.
 Each client launches Sippion with `--root-auto`. Sippion selects the nearest
 recognized Git/project boundary and refuses automatic selection of the user's
 home directory or filesystem root. On Unix, shared group/other-writable
@@ -88,9 +92,9 @@ sippion-macos-x86_64.mcpb
 
 The MCPB manifest asks the host for an explicit project root and launches the
 same local stdio server. The bootstrap + `sippion setup` path above remains the
-recommended route when you want Sippion to configure Codex, Claude Code, and
-Antigravity automatically; Registry/MCPB distribution is an additional
-standards-based installation and discovery channel.
+recommended route when you want Sippion to configure Codex, Claude Code,
+Antigravity, and OpenCode automatically; Registry/MCPB distribution is an
+additional standards-based installation and discovery channel.
 
 ## What Sippion does
 
@@ -101,7 +105,9 @@ repo_context {"q":"authentication token validation"}
 ```
 
 Sippion returns bounded excerpts and structural evidence instead of dumping a
-large part of the repository into the model context.
+large part of the repository into the model context. Internal ranking and
+budget metadata stay internal unless they are needed for correctness; the model
+sees compact paths, line ranges, evidence, and minimal incomplete-search status.
 
 Typical flow:
 
@@ -119,6 +125,29 @@ context.
 
 Optional `session_id` and `agent_id` values can coordinate cooperating agents
 in process memory. They are not persisted.
+
+## Efficiency layer
+
+Sippion separates three responsibilities so the same instruction is not paid
+for repeatedly:
+
+1. MCP server instructions tell the client when to use `repo_context` and when
+   to switch back to native file reads.
+2. `repo_context` returns the smallest useful repository evidence while keeping
+   ranking details internal.
+3. The managed global rule asks the coding agent to build the smallest correct
+   solution, reuse existing code, avoid speculative abstractions and choices,
+   preserve safety checks, and keep user-facing output concise.
+
+The rule is always on and intentionally has no lite/full/ultra modes, Node
+hooks, or runtime upstream fetches. Its design is documented in
+[Efficiency layer](docs/efficiency-layer.md).
+
+Token changes are evaluated only when correctness is preserved. The committed
+[efficiency benchmark pilot](eval/efficiency/README.md) uses four arms, five
+runs per task/arm, deterministic correctness checks, and total model tokens. No
+LLM judge participates in scoring. Sippion does not publish a token-reduction
+claim until real model runs have completed under that protocol.
 
 ## Safety model
 
@@ -147,6 +176,7 @@ For the full trust boundary and installation trust model, see
 - Codex
 - Claude Code
 - Antigravity
+- OpenCode
 
 Restart an already-running client after installation so it reloads its MCP
 configuration.
@@ -235,6 +265,7 @@ cargo fmt --check
 cargo build --release --locked
 cargo test --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
+python3 eval/efficiency/score_test.py
 ```
 
 CI also audits `Cargo.lock` against the RustSec advisory database.
@@ -267,12 +298,23 @@ publishes the prerelease, and deletes the one-shot branch after success.
 Manual draft-release dispatches must be run from the exact tag ref supplied as
 input so the workflow source SHA and built source SHA cannot diverge.
 
+## Credits
+
+The compact efficiency behavior is inspired by
+[Ponytail](https://github.com/DietrichGebert/ponytail) and
+[i-have-adhd](https://github.com/ayghri/i-have-adhd). Sippion rewrites the ideas
+into its own always-on rule rather than vendoring either project. Reviewed
+upstream commits are pinned in `upstream.toml`; license notes are in
+[Third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Documentation
 
 - [日本語 README](README.ja.md)
 - [Architecture](docs/architecture.md)
 - [Security and trust boundary](docs/security.md)
 - [Client setup](docs/clients.md)
+- [Efficiency layer](docs/efficiency-layer.md)
+- [Efficiency benchmark pilot](eval/efficiency/README.md)
 - [Integration boundaries](docs/integrations.md)
 - [Historical RC changes and validation](docs/history/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

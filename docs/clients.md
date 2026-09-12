@@ -2,9 +2,9 @@
 
 The recommended bootstrap installs Sippion for the current user and then runs
 `sippion setup`. Setup pre-registers user-scoped MCP entries for Codex, Claude
-Code, and Antigravity while preserving unrelated settings. Existing client
-sessions must be restarted after setup because MCP configuration is normally
-loaded at startup.
+Code, Antigravity, and OpenCode while preserving unrelated settings. Existing
+client sessions must be restarted after setup because MCP configuration is
+normally loaded at startup.
 
 ## Install
 
@@ -54,16 +54,17 @@ sippion uninstall
 Existing Sippion-managed text blocks are rewritten only when exactly one ordered
 BEGIN/END marker pair is present; malformed or duplicate markers cause a
 fail-closed error instead of risking unrelated settings. Managed files and the
-managed parent directories (`~/.codex`, `~/.claude`, `~/.gemini`, and
-`~/.gemini/config`) are refused when they are symlinks. On Unix, MCP
-configuration files are owner-only `0600` and rollback restores the previous
-permission bits. Setup does not create persistent `.sippion-backup` copies;
-legacy copies are removed transactionally. If any setup operation fails, files
-touched by that setup attempt are restored to their pre-attempt state. `doctor`
-reports missing, mismatched, malformed, or unreadable registrations and exits
-non-zero when any expected registration is unhealthy.
+managed parent directories (`~/.codex`, `~/.claude`, `~/.gemini`,
+`~/.gemini/config`, and `~/.config/opencode`) are refused when they are
+symlinks. On Unix, MCP configuration files are owner-only `0600` and rollback
+restores the previous permission bits. Setup does not create persistent
+`.sippion-backup` copies; legacy copies are removed transactionally. If any
+setup operation fails, files touched by that setup attempt are restored to
+their pre-attempt state. `doctor` reports missing, mismatched, malformed, or
+unreadable registrations and exits non-zero when any expected registration is
+unhealthy.
 
-`uninstall` is transactional as well: it snapshots the same six managed files
+`uninstall` is transactional as well: it snapshots the same eight managed files
 and legacy backup siblings before mutation and restores the pre-attempt state if
 any removal fails. It removes only Sippion-managed entries and rules; it does
 not remove the binary or unrelated settings.
@@ -140,9 +141,27 @@ Use `claude mcp list` or `/mcp` to verify the registration. Antigravity uses
 }
 ```
 
-For automatic repository discovery, Codex reads `AGENTS.md` and Claude Code
-reads `CLAUDE.md`. Both files carry the same short rule: call Sippion before
-broad repository exploration, keep it project-scoped and read-only, and fall
-back honestly when it is unavailable. `AGENTS.md` additionally documents
-sharing a `session_id` and distinct `agent_id` values for cooperating agents;
-that extra instruction is intentionally client-specific.
+OpenCode uses `~/.config/opencode/opencode.json` for the user-wide MCP
+registration:
+
+```json
+{
+  "mcp": {
+    "sippion": {
+      "type": "local",
+      "command": ["/ABSOLUTE/PATH/TO/sippion", "mcp", "--root-auto"],
+      "cwd": "."
+    }
+  }
+}
+```
+
+Sippion keeps repository-discovery guidance in the MCP server instructions, so
+clients use `repo_context` before broad exploration and switch to native reads
+after narrowing. `sippion setup` also installs one compact, always-on efficiency
+rule for coding behavior: prefer the smallest correct implementation, reuse
+existing code, avoid unnecessary abstractions and choices, preserve safety
+checks, and keep user-facing output concise. Codex and OpenCode read the managed
+rule from `AGENTS.md`, Claude Code from `CLAUDE.md`, and Antigravity from
+`GEMINI.md`. Cooperating agents can share a `session_id` and use distinct
+`agent_id` values for retrieval coordination.

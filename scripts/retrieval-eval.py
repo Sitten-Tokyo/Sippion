@@ -20,7 +20,9 @@ PRUNED_DIRS = {
 BM25_K1 = 1.2
 BM25_B = 0.75
 CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-ATOM_HEADER = re.compile(r'^(S|E) path=("(?:\\.|[^"\\])*")')
+LEGACY_ATOM_HEADER = re.compile(r'^(S|E) path=("(?:\\.|[^"\\])*")')
+COMPACT_EVIDENCE_HEADER = re.compile(r'^("(?:\\.|[^"\\])*"):\d+-\d+\s*$')
+COMPACT_PATH_HEADER = re.compile(r'^("(?:\\.|[^"\\])*")\s*$')
 
 
 def percentile(values, p):
@@ -179,24 +181,55 @@ def grep_window_baseline(binary, sources, query, cache, max_files=5, radius=4):
 
 
 def parse_context_atoms(context):
+    """Parse both legacy labeled atoms and the compact model-visible format."""
     atoms = []
     current = None
+
+    def begin(kind, encoded_path, line):
+        try:
+            decoded_path = json.loads(encoded_path)
+        except json.JSONDecodeError:
+            decoded_path = "<invalid>"
+        return {"kind": kind, "path": decoded_path, "text": line}
+
     for line in context.splitlines(keepends=True):
-        match = ATOM_HEADER.match(line)
-        if match:
+        bare = line.rstrip("\r\n")
+        legacy = LEGACY_ATOM_HEADER.match(bare)
+        compact_evidence = COMPACT_EVIDENCE_HEADER.match(bare)
+        compact_path = COMPACT_PATH_HEADER.match(bare)
+
+        if legacy:
             if current is not None:
                 atoms.append(current)
-            try:
-                path = json.loads(match.group(2))
-            except json.JSONDecodeError:
-                path = "<invalid>"
-            current = {
-                "kind": "structure" if match.group(1) == "S" else "evidence",
-                "path": path,
-                "text": line,
-            }
-        elif current is not None:
+            current = begin(
+                "structure" if legacy.group(1) == "S" else "evidence",
+                legacy.group(2),
+                line,
+            )
+            continue
+
+        if compact_evidence:
+            if current is not None:
+                atoms.append(current)
+            current = begin("evidence", compact_evidence.group(1), line)
+            continue
+
+        if compact_path:
+            if current is not None:
+                atoms.append(current)
+            # A bare compact path can represent either a structure atom or path-only
+            # evidence. Classify it from its first continuation line when possible.
+            current = begin("unknown", compact_path.group(1), line)
+            continue
+
+        if current is not None:
+            if current["kind"] == "unknown":
+                if line.startswith("| "):
+                    current["kind"] = "evidence"
+                elif line.startswith("  "):
+                    current["kind"] = "structure"
             current["text"] += line
+
     if current is not None:
         atoms.append(current)
     return atoms
