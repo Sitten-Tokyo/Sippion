@@ -708,16 +708,24 @@ pub(super) fn redact_token_substrings(line: &str) -> String {
     const PREFIXES: &[(&str, usize)] = &[
         ("github_pat_", 32),
         ("ghp_", 32),
+        ("gho_", 32),
+        ("ghu_", 32),
+        ("ghs_", 32),
+        ("ghr_", 32),
         ("glpat-", 24),
         ("npm_", 24),
         ("pypi-", 24),
         ("xapp-", 32),
+        ("xoxa-", 32),
         ("xoxb-", 32),
         ("xoxp-", 32),
+        ("xoxs-", 32),
         ("AIza", 30),
         ("AKIA", 20),
         ("ASIA", 20),
         ("sk-", 24),
+        ("sk_live_", 32),
+        ("sk_test_", 32),
     ];
 
     let mut out = String::with_capacity(line.len());
