@@ -41,19 +41,29 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify Unix bootstrap provenance chain
+      - name: Verify Unix bootstrap strict provenance chain
         if: runner.os != 'Windows'
         shell: sh
         env:
           GH_TOKEN: ${{ github.token }}
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          SIPPION_STRICT_PROVENANCE: '1'
         run: sh scripts/bootstrap.sh
 
-      - name: Exercise Unix attested one-command install in isolated home
+      - name: Verify Unix bootstrap fast checksum path
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          SIPPION_STRICT_PROVENANCE: '0'
+        run: sh scripts/bootstrap.sh
+
+      - name: Exercise Unix strict one-command install in isolated home
         if: runner.os != 'Windows'
         shell: sh
         env:
           GH_TOKEN: ${{ github.token }}
+          SIPPION_STRICT_PROVENANCE: '1'
         run: |
           set -eu
           export HOME="$RUNNER_TEMP/sippion-home"
@@ -70,6 +80,20 @@ jobs:
           grep -q 'mcp_servers.sippion' "$HOME/.codex/config.toml"
           grep -q '"sippion"' "$HOME/.claude.json"
           grep -q '"sippion"' "$HOME/.gemini/config/mcp_config.json"
+          "$SIPPION_INSTALL_DIR/sippion" doctor
+
+      - name: Exercise Unix fast one-command install in isolated home
+        if: runner.os != 'Windows'
+        shell: sh
+        env:
+          SIPPION_STRICT_PROVENANCE: '0'
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/sippion-fast-home"
+          export SIPPION_INSTALL_DIR="$RUNNER_TEMP/sippion-fast-bin"
+          mkdir -p "$HOME"
+          sh scripts/bootstrap.sh
+          test -x "$SIPPION_INSTALL_DIR/sippion"
           "$SIPPION_INSTALL_DIR/sippion" doctor
 
       - name: Verify Unix direct installer checksum-only opt-out
@@ -108,19 +132,29 @@ jobs:
           test -s "$HOME/.gemini/config/mcp_config.json"
           "$SIPPION_INSTALL_DIR/sippion" doctor
 
-      - name: Verify Windows bootstrap provenance chain
+      - name: Verify Windows bootstrap strict provenance chain
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          SIPPION_STRICT_PROVENANCE: '1'
         run: '& scripts/bootstrap.ps1'
 
-      - name: Exercise Windows attested one-command install in isolated home
+      - name: Verify Windows bootstrap fast checksum path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIPPION_BOOTSTRAP_VERIFY_ONLY: '1'
+          SIPPION_STRICT_PROVENANCE: '0'
+        run: '& scripts/bootstrap.ps1'
+
+      - name: Exercise Windows strict one-command install in isolated home
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          SIPPION_STRICT_PROVENANCE: '1'
         run: |
           $fakeHome = Join-Path $env:RUNNER_TEMP "sippion-home"
           $bin = Join-Path $env:RUNNER_TEMP "sippion-bin"
@@ -140,6 +174,23 @@ jobs:
           )) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Expected setup file missing: $path" }
           }
+          & (Join-Path $bin "sippion.exe") doctor
+          if ($LASTEXITCODE -ne 0) { throw "Installed Sippion doctor failed." }
+
+      - name: Exercise Windows fast one-command install in isolated home
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIPPION_STRICT_PROVENANCE: '0'
+        run: |
+          $fakeHome = Join-Path $env:RUNNER_TEMP "sippion-fast-home"
+          $bin = Join-Path $env:RUNNER_TEMP "sippion-fast-bin"
+          New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+          $env:USERPROFILE = $fakeHome
+          $env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
+          $env:SIPPION_INSTALL_DIR = $bin
+          & scripts/bootstrap.ps1
+          if (-not (Test-Path -LiteralPath (Join-Path $bin "sippion.exe") -PathType Leaf)) { throw "Sippion binary was not installed." }
           & (Join-Path $bin "sippion.exe") doctor
           if ($LASTEXITCODE -ne 0) { throw "Installed Sippion doctor failed." }
 

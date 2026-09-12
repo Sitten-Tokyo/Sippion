@@ -2,8 +2,13 @@ $ErrorActionPreference = "Stop"
 
 # One-command bootstrap for Sippion. This bootstrap is intended to be invoked
 # from a commit-SHA-pinned raw GitHub URL. It resolves the newest non-draft
-# published release (including prereleases), verifies installer checksum and
-# provenance before execution, then delegates binary verification and setup.
+# published release (including prereleases), verifies installer checksum
+# before execution, then delegates binary verification and setup.
+#
+# The default path verifies published SHA-256 checksums only and needs no
+# GitHub CLI or authentication. Set SIPPION_STRICT_PROVENANCE=1 to also verify
+# GitHub artifact attestations before anything runs (requires `gh` with
+# `gh attestation` support and GitHub authentication).
 
 $repo = "Sitten-Tokyo/Sippion"
 $verifyOnlyValue = if ($env:SIPPION_BOOTSTRAP_VERIFY_ONLY) { $env:SIPPION_BOOTSTRAP_VERIFY_ONLY } else { "0" }
@@ -11,14 +16,21 @@ if ($verifyOnlyValue -notin @("0", "1")) {
     throw "SIPPION_BOOTSTRAP_VERIFY_ONLY must be 0 or 1."
 }
 $verifyOnly = $verifyOnlyValue -eq "1"
-
-$gh = Get-Command gh -ErrorAction SilentlyContinue
-if (-not $gh) {
-    throw "GitHub CLI is required for provenance verification."
+$strictValue = if ($env:SIPPION_STRICT_PROVENANCE) { $env:SIPPION_STRICT_PROVENANCE } else { "0" }
+if ($strictValue -notin @("0", "1")) {
+    throw "SIPPION_STRICT_PROVENANCE must be 0 or 1."
 }
-& gh attestation --help *> $null
-if ($LASTEXITCODE -ne 0) {
-    throw "A GitHub CLI version with 'gh attestation' support is required."
+$strict = $strictValue -eq "1"
+
+if ($strict) {
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if (-not $gh) {
+        throw "Strict provenance verification requires the GitHub CLI."
+    }
+    & gh attestation --help *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Strict provenance verification requires a GitHub CLI version with 'gh attestation' support."
+    }
 }
 
 $tempRoot = Join-Path $env:TEMP ("sippion-bootstrap-{0}" -f [Guid]::NewGuid().ToString("N"))
@@ -29,13 +41,34 @@ $originalAttestationRepository = $env:SIPPION_ATTESTATION_REPOSITORY
 try {
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
-    $tag = (& gh release list --repo $repo --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName').Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    if ($strict) {
+        $tag = (& gh release list --repo $repo --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName').Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not resolve a valid non-draft published Sippion release tag."
+        }
+    }
+    else {
+        # Without strict provenance, deliberately use the public unauthenticated
+        # endpoint. Public release listing never exposes drafts.
+        $headers = @{
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2026-03-10"
+        }
+        $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=1"
+        $tag = if ($releases -is [array]) { $releases[0].tag_name } else { $releases.tag_name }
+        if ($null -ne $tag) {
+            $tag = $tag.Trim()
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
         throw "Could not resolve a valid non-draft published Sippion release tag."
     }
-    $releaseSha = (& gh api "repos/$repo/commits/$tag" --jq '.sha').Trim()
-    if ($LASTEXITCODE -ne 0 -or $releaseSha -notmatch '^[0-9a-f]{40}$') {
-        throw "Could not resolve the published release tag to a commit SHA."
+    $releaseSha = ""
+    if ($strict) {
+        $releaseSha = (& gh api "repos/$repo/commits/$tag" --jq '.sha').Trim()
+        if ($LASTEXITCODE -ne 0 -or $releaseSha -notmatch '^[0-9a-f]{40}$') {
+            throw "Could not resolve the published release tag to a commit SHA."
+        }
     }
 
     $releaseBase = "https://github.com/$repo/releases/download/$tag"
@@ -53,20 +86,27 @@ try {
         throw "Sippion installer checksum verification failed."
     }
 
-    & gh attestation verify $installer `
-        --repo $repo `
-        --signer-workflow "$repo/.github/workflows/release-draft.yml" `
-        --source-digest $releaseSha *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Sippion installer provenance verification failed."
+    if ($strict) {
+        & gh attestation verify $installer `
+            --repo $repo `
+            --signer-workflow "$repo/.github/workflows/release-draft.yml" `
+            --source-digest $releaseSha *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Sippion installer provenance verification failed."
+        }
     }
 
     if ($verifyOnly) {
-        Write-Host "Verified Sippion bootstrap installer provenance for $tag."
+        if ($strict) {
+            Write-Host "Verified Sippion bootstrap installer provenance for $tag."
+        }
+        else {
+            Write-Host "Verified Sippion bootstrap installer checksum for $tag."
+        }
         return
     }
 
-    $env:SIPPION_REQUIRE_ATTESTATION = "1"
+    $env:SIPPION_REQUIRE_ATTESTATION = $strictValue
     $env:SIPPION_RELEASE_TAG = $tag
     $env:SIPPION_ATTESTATION_REPOSITORY = $repo
 
@@ -76,7 +116,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Sippion is installed and pre-registered for Codex, Claude Code, and Antigravity."
+    Write-Host "Sippion is installed and pre-registered for Codex, Claude Code, Antigravity, and OpenCode."
     Write-Host "Restart those AI clients to reload their MCP settings."
 }
 finally {

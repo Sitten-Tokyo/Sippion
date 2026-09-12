@@ -1,14 +1,20 @@
 # Sippion
 
+[![Release](https://img.shields.io/github/v/release/Sitten-Tokyo/Sippion?label=release)](https://github.com/Sitten-Tokyo/Sippion/releases)
+[![CI](https://github.com/Sitten-Tokyo/Sippion/actions/workflows/ci.yml/badge.svg)](https://github.com/Sitten-Tokyo/Sippion/actions/workflows/ci.yml)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.Sitten--Tokyo%2Fsippion-blue)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.Sitten-Tokyo%2Fsippion/versions/latest)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](THIRD_PARTY_NOTICES.md)
+[![Rust](https://img.shields.io/badge/rust-1.85-orange)](rust-toolchain.toml)
+
 **English** | [日本語](README.ja.md)
 
-**Less context. Less code. Fewer decisions.**
+**Ask what matters, then read 3 files instead of 300.**
 
-Sippion is a local, read-only MCP server and AI coding efficiency layer. It helps
-coding agents narrow repository context before broad file reads, reuse existing
-implementations before adding code, and avoid unnecessary questions,
-abstractions, and output. The objective is to reduce model tokens and human
-decision burden without trading away correctness or safety.
+Sippion is a local, read-only MCP server that hands coding agents the smallest
+useful slice of a repository before they start reading files. One tool,
+`repo_context`, returns bounded code excerpts with structural evidence, plus
+one always-on efficiency rule that stops agents from over-asking,
+over-abstracting, and over-explaining.
 
 Sippion exposes one MCP tool, `repo_context`, which combines bounded lexical
 search, structural context, and source-only semantic ranking to return a small,
@@ -18,15 +24,8 @@ runtime prompt downloads.
 
 ## Quick start
 
-Install Sippion with one command. The bootstrap verifies its downloaded
-installer checksum **and GitHub artifact attestation before executing the
-installer**. The installer then verifies the selected binary checksum and its
-GitHub artifact attestation before installing it and running transactional
-`sippion setup`.
-
-The default path fails closed unless the GitHub CLI (`gh`) is installed, has
-`gh attestation` support, and can authenticate to GitHub. This deliberately
-keeps release provenance verification enabled on the primary install path.
+One command. No GitHub account, no extra tools. Checksums are verified before
+anything runs.
 
 ### macOS / Linux
 
@@ -43,10 +42,6 @@ irm https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/a28b611f169a2731ca89d
 After installation:
 
 ```text
-verify installer checksum + GitHub artifact attestation
-    ↓
-verify binary checksum + GitHub artifact attestation
-    ↓
 Sippion installed
     ↓
 Codex + Claude Code + Antigravity + OpenCode pre-registered
@@ -54,24 +49,40 @@ Codex + Claude Code + Antigravity + OpenCode pre-registered
 Restart those AI clients
 ```
 
-Both attestation checks are bound to the Sippion repository, the expected
-release signer workflow, and the exact commit SHA resolved from the selected
-release tag.
+Need supply-chain provenance instead? Prefix `SIPPION_STRICT_PROVENANCE=1`
+(sh) or set `$env:SIPPION_STRICT_PROVENANCE="1"` (PowerShell) to verify GitHub
+artifact attestations before anything runs. Details in
+[Security and trust boundary](docs/security.md).
 
 Sippion pre-registers **all four clients**, even if one is not installed yet.
-Each client launches Sippion with `--root-auto`. Sippion selects the nearest
-recognized Git/project boundary and refuses automatic selection of the user's
-home directory or filesystem root. On Unix, shared group/other-writable
-ancestor directories are not trusted as automatic boundaries. On Windows,
-`--root-auto` is deliberately limited to projects under the canonical current
-user profile because Sippion cannot safely verify arbitrary shared-directory
-ACLs through stable safe Rust APIs; trusted projects elsewhere can use an
-explicit `--root`. You do not need to register Sippion separately for every
-repository under the normal automatic scope.
+Each client launches Sippion with `--root-auto`: the nearest Git/project
+boundary becomes the root, never your home directory or filesystem root. You
+do not need to register Sippion separately for every repository. See
+[Security and trust boundary](docs/security.md) for the full boundary rules.
 
-A checksum-only direct installer mode remains available as an explicit opt-out
-for controlled environments where provenance was verified by another trusted
-mechanism. See [Security and trust boundary](docs/security.md).
+## Try it in 60 seconds
+
+Open an unfamiliar repository and ask your agent: *"where is auth token
+validation?"*
+
+Without Sippion, the agent globs the repo, opens a dozen files, and burns
+context before answering. With Sippion, it asks one question first:
+
+```text
+repo_context {"q":"authentication token validation"}
+```
+
+and gets back a handful of bounded excerpts —
+`src/auth/validate.rs:42-89`, `src/middleware/session.rs:12-40` — opens two
+files, and answers. That is the whole product: narrow first, read second.
+
+|  | Grep / Glob | Persistent indexers | Sippion |
+|---|---|---|---|
+| Setup | none | daemon + disk index | one command |
+| Freshness | always fresh | reindex lag | always fresh (RAM-only) |
+| What the model sees | raw matches | whole-repo dump risk | bounded excerpts |
+| Network while serving | n/a | varies | none |
+| Writes to your repo | no | sometimes | never |
 
 ## Official MCP Registry
 
@@ -297,6 +308,14 @@ one-shot `release/vX.Y.Z[-prerelease]` branch that points exactly at current
 publishes the prerelease, and deletes the one-shot branch after success.
 Manual draft-release dispatches must be run from the exact tag ref supplied as
 input so the workflow source SHA and built source SHA cannot diverge.
+
+To cut a stable release (e.g. `v0.1.0`): bump `Cargo.toml` to the exact
+version, merge to `main`, push a one-shot `release/v0.1.0` branch at current
+`main`, wait for the workflow to publish, then flip the prerelease flag off:
+
+```sh
+gh release edit v0.1.0 --repo Sitten-Tokyo/Sippion --prerelease=false
+```
 
 ## Credits
 
