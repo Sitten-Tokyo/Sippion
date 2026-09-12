@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/efficiency-apply.yml
       - .github/scripts/apply-efficiency.py
+      - .github/scripts/fix-efficiency-tests.py
 
 permissions:
   contents: write
@@ -27,7 +28,9 @@ jobs:
           components: rustfmt, clippy
 
       - name: Apply patch
-        run: python3 .github/scripts/apply-efficiency.py
+        run: |
+          python3 .github/scripts/apply-efficiency.py
+          python3 .github/scripts/fix-efficiency-tests.py
 
       - name: Verify
         run: |
@@ -40,7 +43,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          rm -f .github/workflows/efficiency-apply.yml .github/scripts/apply-efficiency.py
+          rm -f .github/workflows/efficiency-apply.yml
+          rm -f .github/scripts/apply-efficiency.py .github/scripts/fix-efficiency-tests.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
