@@ -43,6 +43,8 @@ Do not use an LLM judge. Exclude tasks whose requested behavior cannot be evalua
 
 Any correctness or security regression disqualifies an arm regardless of token savings. Among eligible arms, lower median total tokens wins. The scorer fails closed when a task/arm is missing the required run count or repeats a run id.
 
+The repository retrieval evaluator accepts both legacy labeled context atoms and the compact model-visible format. Output compaction therefore remains subject to the same mechanically checked evidence requirements instead of weakening the retrieval gate.
+
 ## Scoring
 
 With five runs per task/arm:
