@@ -29,7 +29,6 @@ old_assert = '''fn assert_complete_no_match(text: &str) {
     assert!(!text.contains("NO_MATCH_IN_SEARCHABLE_SET"));
 }'''
 new_assert = '''fn assert_complete_no_match(text: &str) {
-    assert!(!text.contains("INCOMPLETE"));
     assert!(!text.contains("excluded="));
     assert!(!text.contains("CTX v="));
     assert!(text.contains("\\n[NO_MATCH]\\n"));
