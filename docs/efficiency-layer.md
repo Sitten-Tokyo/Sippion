@@ -130,7 +130,7 @@ Arms:
 
 Pilot with 12 tasks: 4 TypeScript/React, 4 Python, 4 Rust, including at least one monorepo. Cover bug fixes, features, refactors, reviews, dependency temptations, abstraction temptations, ambiguity, and security. Include both ambiguity cases where asking one question is correct and cases where choosing a reasonable default is correct.
 
-The real Codex pilot requires an `OPENAI_API_KEY` Actions secret. Missing credentials must block the model run rather than silently substituting a different model or synthetic token estimate. Do not publish a token-reduction claim until real Codex runs complete under this protocol. After the pilot is stable, expand to 30 tasks.
+The real Codex pilot is implemented by `eval/efficiency/run_pilot.py` and requires either an already authenticated local Codex CLI or an `OPENAI_API_KEY` Actions secret. Missing credentials must block the model run rather than silently substituting a different model or synthetic token estimate. Do not publish a token-reduction claim until real Codex runs complete under this protocol. After the pilot is stable, expand to 30 tasks.
 
 ## Upstream tracking
 

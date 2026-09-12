@@ -9,3 +9,5 @@
 .idea/
 .vscode/
 *.tmp
+/eval/efficiency/results.jsonl
+/eval/efficiency/score.json
