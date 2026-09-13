@@ -37,6 +37,11 @@ unicode-normalization = "=0.1.25"
 [target.'cfg(windows)'.dependencies]
 winapi-util = "=0.1.11"
 
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+
 [lints.rust]
 unsafe_code = "forbid"
 
