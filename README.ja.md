@@ -66,6 +66,10 @@ Sippion repo_context
 AIが関連ソースだけ読む
 ```
 
+`setup` は、広いリポジトリ探索の前に `repo_context` を使うよう案内する
+repository-discovery rule（リポジトリ探索ルール）も管理します。
+コーディング方針、実装スタイル、応答スタイルを強制するルールは設定しません。
+
 `session_id` と `agent_id` を指定すると、複数エージェント間でプロセスメモリ上の
 協調情報を共有できます。永続化はされません。
 
@@ -115,16 +119,6 @@ Sippionは検索中に、リポジトリ内のコード、build script、compile
 
 完全なtrust boundary（信頼境界）は [Security and trust boundary](docs/security.md) を参照してください。
 
-## Efficiency rule（効率化ルール）
-
-`sippion setup` は、対応エージェントへ小さな常時有効ルールを設定します。
-最小の正しい実装、既存コードの再利用、不要な抽象化の回避、安全性の維持、短いユーザー向け出力を
-優先させます。lite/full/ultraのようなモード切替や、実行時のprompt downloadはありません。
-
-トークン効率は、deterministic check（機械的に再現可能な正誤判定）を通過してcorrectness（正しさ）が
-維持された場合だけ改善として評価します。詳しくは [Efficiency layer](docs/efficiency-layer.md) と
-[benchmark pilot](eval/efficiency/README.md) を参照してください。
-
 ## 開発
 
 Rust 1.85.0を固定し、`Cargo.lock` をコミットしています。
@@ -134,7 +128,6 @@ cargo fmt --check
 cargo build --release --locked
 cargo test --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
-python3 eval/efficiency/score_test.py
 ```
 
 release binary（配布用バイナリ）は `target/release/sippion`、Windowsでは `sippion.exe` です。
@@ -150,15 +143,7 @@ retrieval（検索）、security、distribution（配布）、workflowを変更�
 - [Architecture](docs/architecture.md)
 - [Security and trust boundary](docs/security.md)
 - [Client setup](docs/clients.md)
-- [Efficiency layer](docs/efficiency-layer.md)
 - [Quality and validation](docs/quality.md)
 - [Integration boundaries](docs/integrations.md)
 - [Historical changes](docs/history/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
-
-## Credits
-
-効率化ルールの発想は [Ponytail](https://github.com/DietrichGebert/ponytail) と
-[i-have-adhd](https://github.com/ayghri/i-have-adhd) を参考にしています。
-確認済みのupstream commitは `upstream.toml`、ライセンス情報は
-[Third-party notices](THIRD_PARTY_NOTICES.md) に記載しています。
