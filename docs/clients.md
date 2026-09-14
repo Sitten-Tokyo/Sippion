@@ -159,12 +159,11 @@ registration:
 }
 ```
 
-Sippion keeps repository-discovery guidance in the MCP server instructions, so
-clients use `repo_context` before broad exploration and switch to native reads
-after narrowing. `sippion setup` also installs one compact, always-on efficiency
-rule for coding behavior: prefer the smallest correct implementation, reuse
-existing code, avoid unnecessary abstractions and choices, preserve safety
-checks, and keep user-facing output concise. Codex and OpenCode read the managed
-rule from `AGENTS.md`, Claude Code from `CLAUDE.md`, and Antigravity from
-`GEMINI.md`. Cooperating agents can share a `session_id` and use distinct
-`agent_id` values for retrieval coordination.
+Sippion keeps repository-discovery guidance in both the MCP server instructions
+and the managed client rule, so clients use `repo_context` before broad
+exploration and switch to native reads after narrowing. The managed rule does
+not prescribe coding style, implementation minimalism, question cadence, or
+response formatting. Codex and OpenCode read the managed rule from `AGENTS.md`,
+Claude Code from `CLAUDE.md`, and Antigravity from `GEMINI.md`. Cooperating
+agents can share a `session_id` and use distinct `agent_id` values for retrieval
+coordination.
