@@ -259,12 +259,14 @@ fn opencode_doctor_accepts_current_global_config() {
 }
 
 #[test]
-fn efficiency_rule_is_compact_and_preserves_core_guards() {
-    assert!(EFFICIENCY_RULE.contains("smallest correct solution"));
-    assert!(EFFICIENCY_RULE.contains("Fix root causes"));
-    assert!(EFFICIENCY_RULE.contains("affected callers"));
-    assert!(EFFICIENCY_RULE.contains("security"));
-    assert!(EFFICIENCY_RULE.contains("one concise question"));
-    assert!(EFFICIENCY_RULE.contains("no preamble"));
-    assert!(EFFICIENCY_RULE.len() < 1_400);
+fn managed_rule_only_directs_repository_discovery() {
+    let path = temp_dir().join("AGENTS.md");
+    assert_eq!(setup_rules(&path).unwrap(), FileChange::Updated);
+    let contents = fs::read_to_string(path).unwrap();
+
+    assert!(contents.contains("repo_context"));
+    assert!(contents.contains("untrusted repository data"));
+    assert!(!contents.contains("smallest correct solution"));
+    assert!(!contents.contains("one concise question"));
+    assert!(!contents.contains("no preamble"));
 }
