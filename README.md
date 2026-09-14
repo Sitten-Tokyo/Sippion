@@ -66,6 +66,10 @@ Sippion repo_context
 AI reads the relevant source files
 ```
 
+`setup` also installs a managed repository-discovery rule that tells supported
+clients to use `repo_context` before broad repository exploration. It does not
+install coding-style, implementation-style, or response-style rules.
+
 Optional `session_id` and `agent_id` values coordinate cooperating agents in
 process memory; they are not persisted.
 
@@ -116,17 +120,6 @@ before model output.
 
 See [Security and trust boundary](docs/security.md) for the complete model.
 
-## Efficiency rule
-
-`sippion setup` installs one compact, always-on rule that asks supported coding
-agents to prefer the smallest correct solution, reuse existing code, avoid
-speculative abstraction, preserve safety checks, and keep user-facing output
-concise. There are no lite/full/ultra modes or runtime prompt downloads.
-
-Correctness comes first: token efficiency is evaluated only when deterministic
-checks still pass. See [Efficiency layer](docs/efficiency-layer.md) and the
-[benchmark pilot](eval/efficiency/README.md).
-
 ## Development
 
 Sippion pins Rust 1.85.0 and commits `Cargo.lock`.
@@ -136,7 +129,6 @@ cargo fmt --check
 cargo build --release --locked
 cargo test --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
-python3 eval/efficiency/score_test.py
 ```
 
 The release binary is `target/release/sippion` (`sippion.exe` on Windows).
@@ -152,16 +144,7 @@ distribution, or workflow behavior.
 - [Architecture](docs/architecture.md)
 - [Security and trust boundary](docs/security.md)
 - [Client setup](docs/clients.md)
-- [Efficiency layer](docs/efficiency-layer.md)
 - [Quality and validation](docs/quality.md)
 - [Integration boundaries](docs/integrations.md)
 - [Historical changes](docs/history/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
-
-## Credits
-
-The compact efficiency behavior is inspired by
-[Ponytail](https://github.com/DietrichGebert/ponytail) and
-[i-have-adhd](https://github.com/ayghri/i-have-adhd). Reviewed upstream commits
-are pinned in `upstream.toml`; license notes are in
-[Third-party notices](THIRD_PARTY_NOTICES.md).
