@@ -24,15 +24,6 @@ Sippion uses third-party Rust crates. The source archive does not vendor those c
 | `tree-sitter-cpp` 0.23.4 | C++ grammar | MIT |
 | `winapi-util` 0.1.11 (Windows only) | safe open-handle file metadata / hard-link count | Unlicense OR MIT |
 
-## Design inspirations
-
-Sippion's compact efficiency behavior is inspired by:
-
-- Ponytail — <https://github.com/DietrichGebert/ponytail> — MIT
-- i-have-adhd — <https://github.com/ayghri/i-have-adhd> — MIT
-
-Those repositories are not vendored. Sippion uses a rewritten, Sippion-native rule; the reviewed upstream commit SHAs are pinned in `upstream.toml`.
-
 ## Release requirement
 
 Before distributing a release binary, generate and commit `Cargo.lock`, then produce a dependency/license report from the exact locked dependency graph. This file records the direct dependency boundary; `Cargo.lock` is authoritative for exact transitive versions.
