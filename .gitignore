@@ -10,4 +10,5 @@
 .vscode/
 *.tmp
 /eval/efficiency/results.jsonl
+/eval/efficiency/quick-results.jsonl
 /eval/efficiency/score.json

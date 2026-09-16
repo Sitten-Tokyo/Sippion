@@ -48,6 +48,46 @@ Build Sippion before a real run:
 cargo build --release --locked
 ```
 
+## Quick token benchmark
+
+For a directional answer to "how many tokens does Sippion save?", use the quick
+benchmark before spending the 240 model calls required by the full pilot. It
+runs one relatively small pinned task from each language group under only two
+arms:
+
+- `react-02` (Preact)
+- `py-02` (Requests)
+- `rust-01` (serde_json)
+- `baseline` versus `retrieval`
+- one run per task/arm, for **6 model calls total**
+
+Validate the quick matrix without making a model call:
+
+```sh
+python3 eval/efficiency/run_quick.py --dry-run
+```
+
+Run it after building Sippion:
+
+```sh
+python3 eval/efficiency/run_quick.py \
+  --sippion-binary target/release/sippion
+```
+
+Resume or rescore an existing result file without another model call:
+
+```sh
+python3 eval/efficiency/run_quick.py --score-only
+python3 eval/efficiency/run_quick.py --score-only --format json
+```
+
+The quick scorer reports per-task and combined baseline-versus-retrieval token
+savings using the same `total_tokens` definition as the full pilot. It reports
+an overall savings percentage only when all six deterministic correctness
+checks pass. Because there is only one run per arm and three tasks, treat this
+as a smoke estimate; use the full pilot for a release-level token-reduction
+claim.
+
 ## Dry-run
 
 Dry-run performs no model call and validates the complete matrix, duplicate
@@ -127,6 +167,8 @@ No model call is made by these checks:
 ```sh
 python3 eval/efficiency/score_test.py
 python3 eval/efficiency/run_pilot_test.py
+python3 eval/efficiency/run_quick_test.py
+python3 eval/efficiency/run_quick.py --dry-run
 python3 eval/efficiency/run_pilot.py --dry-run
 ```
 

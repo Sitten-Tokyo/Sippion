@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate efficiency tooling syntax
-        run: python3 -m py_compile eval/efficiency/score.py eval/efficiency/score_test.py eval/efficiency/run_pilot.py eval/efficiency/run_pilot_test.py eval/efficiency/verify_task.py
+        run: python3 -m py_compile eval/efficiency/score.py eval/efficiency/score_test.py eval/efficiency/run_pilot.py eval/efficiency/run_pilot_test.py eval/efficiency/run_quick.py eval/efficiency/run_quick_test.py eval/efficiency/verify_task.py
 
       - name: Run scorer unit tests
         working-directory: eval/efficiency
@@ -27,6 +27,13 @@ jobs:
       - name: Run pilot runner unit tests
         working-directory: eval/efficiency
         run: python3 -m unittest run_pilot_test.py
+
+      - name: Run quick benchmark unit tests
+        working-directory: eval/efficiency
+        run: python3 -m unittest run_quick_test.py
+
+      - name: Validate quick benchmark matrix without model calls
+        run: python3 eval/efficiency/run_quick.py --dry-run
 
       - name: Validate complete pilot matrix without model calls
         run: python3 eval/efficiency/run_pilot.py --dry-run
