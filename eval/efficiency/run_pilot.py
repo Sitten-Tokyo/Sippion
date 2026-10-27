@@ -37,7 +37,8 @@ RESULT_FIELDS = frozenset(
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{40}$")
 TASK_ID_RE = re.compile(r"^[a-z0-9]+-[0-9]{2}$")
-DEFAULT_RUNS = 5
+DEFAULT_RUNS = 1
+MAX_RUNS = 3
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_OUTPUT = Path("eval/efficiency/results.jsonl")
 DEFAULT_MANIFEST = Path(__file__).with_name("tasks.json")
@@ -245,8 +246,8 @@ def expand_executions(
     task_filter: str | None = None,
     arm_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    if runs < 1 or runs > DEFAULT_RUNS:
-        raise PilotError(f"runs must be between 1 and {DEFAULT_RUNS}")
+    if runs < 1 or runs > MAX_RUNS:
+        raise PilotError(f"runs must be between 1 and {MAX_RUNS}")
     if arm_filter is not None and arm_filter not in ARMS:
         raise PilotError(f"unknown arm: {arm_filter}")
     selected_tasks = [task for task in tasks if task_filter is None or task["id"] == task_filter]
@@ -793,7 +794,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tasks = load_manifest(args.manifest)
         executions = expand_executions(tasks, args.runs, args.task, args.arm)
         task_ids = {task["id"] for task in tasks}
-        existing = load_results(args.output, task_ids, max_run=DEFAULT_RUNS)
+        existing = load_results(args.output, task_ids, max_run=args.runs)
         if args.dry_run:
             print(
                 json.dumps(
