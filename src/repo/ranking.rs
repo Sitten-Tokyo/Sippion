@@ -487,6 +487,25 @@ pub(super) fn coding_source_prior(path: &str) -> f64 {
     }
 }
 
+/// A definition owner whose source filename matches a query identifier should not
+/// lose to a test/usage mirror merely because the latter repeats the identifier.
+pub(super) fn query_named_implementation_prior(path: &str, terms: &[String]) -> f64 {
+    if coding_source_prior(path) < 14.0 {
+        return 0.0;
+    }
+    let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let Some((stem, _extension)) = filename.rsplit_once('.') else {
+        return 0.0;
+    };
+    let stem = crate::core::unicode_search_fold(stem);
+    // Short/common filename words (e.g. read, get) do not identify an owner reliably.
+    if stem.chars().count() >= 5 && terms.iter().any(|term| term == &stem) {
+        18.0
+    } else {
+        0.0
+    }
+}
+
 pub(super) fn hit_is_better(candidate: &SearchHit, current: &SearchHit) -> bool {
     candidate
         .score
@@ -533,7 +552,7 @@ pub(super) fn read_failure_makes_scan_incomplete(error: &RepositoryAccessError) 
 
 #[cfg(test)]
 mod coding_source_prior_tests {
-    use super::{coding_source_prior, is_test_like_source};
+    use super::{coding_source_prior, is_test_like_source, query_named_implementation_prior};
 
     #[test]
     fn implementation_sources_get_a_small_coding_prior() {
@@ -541,6 +560,24 @@ mod coding_source_prior_tests {
             coding_source_prior("src/repo/map.rs") > coding_source_prior("docs/architecture.md")
         );
         assert_eq!(coding_source_prior("CHANGELOG.md"), 0.0);
+    }
+
+    #[test]
+    fn query_named_implementation_is_preferred_over_usage_mirrors() {
+        let query = vec!["command".to_string(), "subcommands".to_string()];
+        assert_eq!(
+            query_named_implementation_prior("src/System.CommandLine/Command.cs", &query),
+            18.0
+        );
+        assert_eq!(
+            query_named_implementation_prior("src/System.CommandLine.Tests/CommandTests.cs", &query),
+            0.0
+        );
+        assert_eq!(query_named_implementation_prior("docs/Command.md", &query), 0.0);
+        assert_eq!(
+            query_named_implementation_prior("src/Read.cs", &["read".to_string()]),
+            0.0
+        );
     }
 
     #[test]
