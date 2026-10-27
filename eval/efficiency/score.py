@@ -27,7 +27,8 @@ class Run:
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens + self.cache_read_tokens
+        # Cached input is included in input_tokens (not an additional charge).
+        return self.input_tokens + self.output_tokens
 
 
 def _non_negative_int(value: object, field: str, line: int) -> int:
@@ -59,20 +60,25 @@ def parse_runs(lines: Iterable[str]) -> list[Run]:
         if not isinstance(correctness, bool):
             raise ValueError(f"line {line_number}: correctness must be boolean")
 
+        input_tokens = _non_negative_int(row.get("input_tokens"), "input_tokens", line_number)
+        cache_read_tokens = _non_negative_int(
+            row.get("cache_read_tokens"), "cache_read_tokens", line_number
+        )
+        if cache_read_tokens > input_tokens:
+            raise ValueError(
+                f"line {line_number}: cache_read_tokens cannot exceed input_tokens"
+            )
+
         runs.append(
             Run(
                 task=task,
                 arm=arm,
                 run=_non_negative_int(row.get("run"), "run", line_number),
-                input_tokens=_non_negative_int(
-                    row.get("input_tokens"), "input_tokens", line_number
-                ),
+                input_tokens=input_tokens,
                 output_tokens=_non_negative_int(
                     row.get("output_tokens"), "output_tokens", line_number
                 ),
-                cache_read_tokens=_non_negative_int(
-                    row.get("cache_read_tokens"), "cache_read_tokens", line_number
-                ),
+                cache_read_tokens=cache_read_tokens,
                 correctness=correctness,
             )
         )
