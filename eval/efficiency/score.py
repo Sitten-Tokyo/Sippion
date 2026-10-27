@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 ARMS = ("baseline", "retrieval", "minimal-build", "full")
+REQUIRED_TASKS = 12
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,8 @@ def analyze(runs: list[Run]) -> dict[str, object]:
 
     grouped: dict[tuple[str, str], list[Run]] = defaultdict(list)
     tasks = sorted({run.task for run in runs})
+    if len(tasks) != REQUIRED_TASKS:
+        raise ValueError(f"expected {REQUIRED_TASKS} tasks, found {len(tasks)}")
     for run in runs:
         grouped[(run.task, run.arm)].append(run)
 
