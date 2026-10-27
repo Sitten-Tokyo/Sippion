@@ -119,7 +119,7 @@ Correctness gates:
 
 Do not use an LLM judge. Exclude tasks that cannot be mechanically evaluated.
 
-Start with `n=1` per task/arm (48 real Codex executions across 12 tasks and 4 arms) to limit evaluation cost. This is an exploratory screen only: it cannot measure run-to-run variance, and the lowest-token arm is provisional. Optional replication uses `n=3` (144 executions) in a separate result set; even replicated evidence must pass correctness and security gates.
+The pilot uses exactly `n=1` per task/arm: 48 real Codex executions across 12 tasks and 4 arms. The run count is fixed, not configurable. This is an exploratory screen only: it cannot measure run-to-run variance, and the lowest-token arm is provisional. Correctness and security remain hard gates.
 
 Arms:
 
@@ -130,7 +130,7 @@ Arms:
 
 Pilot with 12 tasks: 4 TypeScript/React, 4 Python, 4 Rust, including at least one monorepo. Cover bug fixes, features, refactors, reviews, dependency temptations, abstraction temptations, ambiguity, and security. Include both ambiguity cases where asking one question is correct and cases where choosing a reasonable default is correct.
 
-The real Codex pilot is implemented by `eval/efficiency/run_pilot.py` and requires either an already authenticated local Codex CLI or an `OPENAI_API_KEY` Actions secret. Missing credentials must block the model run rather than silently substituting a different model or synthetic token estimate. Do not publish a proven token-reduction claim based solely on the single-run pilot. Evaluate replicated evidence separately before making performance claims; expand the matrix only if a specific validation gap justifies the additional cost.
+The real Codex pilot is implemented by `eval/efficiency/run_pilot.py` and requires either an already authenticated local Codex CLI or an `OPENAI_API_KEY` Actions secret. Missing credentials must block the model run rather than silently substituting a different model or synthetic token estimate. Do not publish a proven token-reduction claim based solely on the single-run pilot. Report token differences only as exploratory observations, without implying statistical reliability.
 
 ## Upstream tracking
 
