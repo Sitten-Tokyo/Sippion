@@ -28,6 +28,11 @@ jobs:
             exit 1
           fi
 
+      - name: Install pinned Codex CLI
+        run: |
+          npm install --global @openai/codex@0.164.0
+          codex --version
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
         with:
