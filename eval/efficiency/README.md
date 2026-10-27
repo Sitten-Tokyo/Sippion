@@ -25,6 +25,11 @@ Each task runs five times under each arm (240 executions total):
 3. `minimal-build`: retrieval plus the smallest-correct-solution rule.
 4. `full`: retrieval plus the complete managed efficiency rule.
 
+The runner uses Codex `workspace-write` sandboxing with approval disabled,
+not the no-sandbox bypass. Its setup and verifier commands still execute
+external code: run the pilot only in disposable, isolated CI runners or other
+trusted OS-level isolation.
+
 The runner writes each run in a fresh checkout, private HOME/cache/temp
 directories, and temporary `CODEX_HOME`. It checks out the manifest commit
 before setup and never changes the user's global Codex configuration.
@@ -101,10 +106,12 @@ The runner parses every Codex JSONL `turn.completed` event and sums its usage
 for the session. It requires `input_tokens`, `output_tokens`, and cached-input
 usage (flat `cached_input_tokens` or nested
 `input_tokens_details.cached_tokens`). It never uses the first event alone and
-never guesses a missing field. The scorer's definition remains:
+never guesses a missing field. Cached input is a subset of input_tokens and
+is retained for diagnosis, not added again to the total. An impossible cache
+count larger than input_tokens is rejected. The scorer's definition remains:
 
 ```text
-total_tokens = input_tokens + output_tokens + cache_read_tokens
+total_tokens = input_tokens + output_tokens
 ```
 
 ## Scoring and correctness gate
