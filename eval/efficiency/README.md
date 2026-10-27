@@ -38,7 +38,7 @@ before setup and never changes the user's global Codex configuration.
 
 - Python 3.10 or newer
 - Git
-- Codex CLI (`codex exec --json`)
+- Codex CLI (`codex exec --json`; the manual Actions workflow installs pinned version `0.164.0`)
 - A release Sippion binary for retrieval arms
 
 Authentication can come from an already authenticated local Codex CLI or from
