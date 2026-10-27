@@ -39,13 +39,12 @@ jobs:
       - name: Run real Codex pilot
         run: |
           python3 eval/efficiency/run_pilot.py \
-            --runs 1 \
             --output eval/efficiency/results.jsonl \
             --sippion-binary target/release/sippion
 
       - name: Score pilot
         if: always() && hashFiles('eval/efficiency/results.jsonl') != ''
-        run: python3 eval/efficiency/score.py eval/efficiency/results.jsonl --runs 1 --format json | tee eval/efficiency/score.json
+        run: python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json | tee eval/efficiency/score.json
 
       - name: Upload pilot results
         if: always()
