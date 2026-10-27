@@ -31,6 +31,22 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(result["arms"]["full"]["median_task_tokens"], 70)
         self.assertAlmostEqual(result["arms"]["full"]["vs_baseline_percent"], -30.0)
 
+    def test_cached_input_is_not_counted_twice(self) -> None:
+        example = score.parse_runs([
+            '{"task":"task-a","arm":"baseline","run":1,'
+            '"input_tokens":100,"output_tokens":20,"cache_read_tokens":80,'
+            '"correctness":true}'
+        ])[0]
+        self.assertEqual(example.total_tokens, 120)
+
+    def test_cache_read_exceeding_input_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot exceed input_tokens"):
+            score.parse_runs([
+                '{"task":"task-a","arm":"baseline","run":1,'
+                '"input_tokens":10,"output_tokens":2,"cache_read_tokens":11,'
+                '"correctness":true}'
+            ])
+
     def test_correctness_failure_disqualifies_lower_token_arm(self) -> None:
         lines = []
         for arm in score.ARMS:
