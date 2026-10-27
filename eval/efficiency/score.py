@@ -69,11 +69,15 @@ def parse_runs(lines: Iterable[str]) -> list[Run]:
                 f"line {line_number}: cache_read_tokens cannot exceed input_tokens"
             )
 
+        run_id = _non_negative_int(row.get("run"), "run", line_number)
+        if run_id != 1:
+            raise ValueError(f"line {line_number}: run must be 1 (fixed pilot)")
+
         runs.append(
             Run(
                 task=task,
                 arm=arm,
-                run=_non_negative_int(row.get("run"), "run", line_number),
+                run=run_id,
                 input_tokens=input_tokens,
                 output_tokens=_non_negative_int(
                     row.get("output_tokens"), "output_tokens", line_number
@@ -87,9 +91,7 @@ def parse_runs(lines: Iterable[str]) -> list[Run]:
     return runs
 
 
-def analyze(runs: list[Run], expected_runs: int = 1) -> dict[str, object]:
-    if expected_runs < 1:
-        raise ValueError("expected_runs must be positive")
+def analyze(runs: list[Run]) -> dict[str, object]:
 
     grouped: dict[tuple[str, str], list[Run]] = defaultdict(list)
     tasks = sorted({run.task for run in runs})
@@ -101,18 +103,17 @@ def analyze(runs: list[Run], expected_runs: int = 1) -> dict[str, object]:
         task_results[task] = {}
         for arm in ARMS:
             group = grouped.get((task, arm), [])
-            if len(group) != expected_runs:
-                raise ValueError(
-                    f"{task}/{arm}: expected {expected_runs} runs, found {len(group)}"
-                )
-            run_ids = [item.run for item in group]
-            if len(set(run_ids)) != len(run_ids):
-                raise ValueError(f"{task}/{arm}: duplicate run id")
-            totals = [item.total_tokens for item in group]
+            if len(group) > 1:
+                raise ValueError(f"{task}/{arm}: duplicate or extra execution")
+            if not group:
+                raise ValueError(f"{task}/{arm}: expected 1 run, found 0")
+            item = group[0]
+            if item.run != 1:
+                raise ValueError(f"{task}/{arm}: run must be 1 (fixed pilot)")
             task_results[task][arm] = {
-                "correct": all(item.correctness for item in group),
-                "median_total_tokens": statistics.median(totals),
-                "runs": expected_runs,
+                "correct": item.correctness,
+                "median_total_tokens": item.total_tokens,
+                "runs": 1,
             }
 
     arms: dict[str, dict[str, object]] = {}
@@ -150,14 +151,14 @@ def analyze(runs: list[Run], expected_runs: int = 1) -> dict[str, object]:
         if eligible
         else None
     )
-    return {"expected_runs": expected_runs, "exploratory": expected_runs < 3, "tasks": task_results, "arms": arms, "winner": winner}
+    return {"expected_runs": 1, "exploratory": True, "tasks": task_results, "arms": arms, "winner": winner}
 
 
 def render_markdown(result: dict[str, object]) -> str:
     arms = result["arms"]
     assert isinstance(arms, dict)
     lines = [
-        "| Arm | Correctness gate | Median total tokens | " + ("vs baseline (exploratory)" if result["exploratory"] else "vs baseline") + " |",
+        "| Arm | Correctness gate | Median task tokens | vs baseline (exploratory) |",
         "| --- | --- | ---: | ---: |",
     ]
     for arm in ARMS:
@@ -169,8 +170,7 @@ def render_markdown(result: dict[str, object]) -> str:
         delta_text = "—" if delta is None else f"{float(delta):+.2f}%"
         lines.append(f"| {arm} | {gate} | {tokens:g} | {delta_text} |")
     winner = result["winner"]
-    leader_label = "Provisional leader" if result["exploratory"] else "Winner"
-    lines.extend(["", f"{leader_label}: {winner if winner is not None else 'none (correctness gate failed)'}"])
+    lines.extend(["", f"Provisional leader: {winner if winner is not None else 'none (correctness gate failed)'}"])
     return "\n".join(lines)
 
 
@@ -179,13 +179,12 @@ def main() -> int:
         description="Score Sippion efficiency runs using correctness gates and total tokens."
     )
     parser.add_argument("input", type=Path, help="JSONL benchmark results")
-    parser.add_argument("--runs", type=int, default=1, help="required runs per task/arm (default: exploratory 1)")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     args = parser.parse_args()
 
     try:
         with args.input.open(encoding="utf-8") as handle:
-            result = analyze(parse_runs(handle), args.runs)
+            result = analyze(parse_runs(handle))
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
