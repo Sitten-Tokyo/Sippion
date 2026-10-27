@@ -570,10 +570,16 @@ mod coding_source_prior_tests {
             18.0
         );
         assert_eq!(
-            query_named_implementation_prior("src/System.CommandLine.Tests/CommandTests.cs", &query),
+            query_named_implementation_prior(
+                "src/System.CommandLine.Tests/CommandTests.cs",
+                &query
+            ),
             0.0
         );
-        assert_eq!(query_named_implementation_prior("docs/Command.md", &query), 0.0);
+        assert_eq!(
+            query_named_implementation_prior("docs/Command.md", &query),
+            0.0
+        );
         assert_eq!(
             query_named_implementation_prior("src/Read.cs", &["read".to_string()]),
             0.0
