@@ -18,7 +18,7 @@ The task categories cover bug fixes, features, refactors, reviews, dependency
 and abstraction temptations, both kinds of ambiguity, and security-sensitive
 work. Every verifier is deterministic; no LLM judge is used.
 
-Each task runs five times under each arm (240 executions total):
+Each task runs once under each arm (48 executions total, down from 240):
 
 1. `baseline`: no Sippion MCP and no Sippion rule.
 2. `retrieval`: only the `repo_context` MCP tool.
@@ -63,8 +63,8 @@ output path:
 python3 eval/efficiency/run_pilot.py --dry-run
 ```
 
-The default report must show `12` tasks, `4` arms, `5` runs per task/arm, and
-`240` executions. A filtered dry-run is useful for checking one task or arm.
+The default report must show `12` tasks, `4` arms, `1` run per task/arm, and
+`48` executions. A filtered dry-run is useful for checking one task or arm.
 
 ## Real Codex runs
 
@@ -76,11 +76,11 @@ python3 eval/efficiency/run_pilot.py \
   --sippion-binary target/release/sippion
 ```
 
-Run the full pilot:
+Run the default exploratory pilot:
 
 ```sh
 python3 eval/efficiency/run_pilot.py \
-  --runs 5 --output eval/efficiency/results.jsonl \
+  --runs 1 --output eval/efficiency/results.jsonl \
   --sippion-binary target/release/sippion
 ```
 
@@ -127,6 +127,13 @@ The scorer takes the median total tokens per task/arm, then the median across
 task medians. An arm is eligible only when every run for every task passes the
 correctness gate. Lower token use cannot compensate for a failed verifier.
 
+The 48-run default is an exploratory screen, not statistical validation: a
+single run per task/arm cannot measure within-task variance. The scorer labels
+the leading arm *provisional*, and no percentage reduction should be advertised
+as a proven result on these data alone. For optional replication, run a
+separate result file with `--runs 3` (144 executions total), then score it
+with `--runs 3`; the 12 tasks and four comparison arms stay unchanged.
+
 ## Tests and CI
 
 No model call is made by these checks:
@@ -137,7 +144,7 @@ python3 eval/efficiency/run_pilot_test.py
 python3 eval/efficiency/run_pilot.py --dry-run
 ```
 
-Pull-request CI runs syntax checks, deterministic unit tests, and the 240-run
+Pull-request CI runs syntax checks, deterministic unit tests, and the 48-run
 dry-run only. The real pilot workflow is `workflow_dispatch` only and uploads
 the JSONL results as an artifact. It fails clearly when the Actions secret is
 missing.
