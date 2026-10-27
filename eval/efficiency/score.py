@@ -87,7 +87,7 @@ def parse_runs(lines: Iterable[str]) -> list[Run]:
     return runs
 
 
-def analyze(runs: list[Run], expected_runs: int = 5) -> dict[str, object]:
+def analyze(runs: list[Run], expected_runs: int = 1) -> dict[str, object]:
     if expected_runs < 1:
         raise ValueError("expected_runs must be positive")
 
@@ -150,14 +150,14 @@ def analyze(runs: list[Run], expected_runs: int = 5) -> dict[str, object]:
         if eligible
         else None
     )
-    return {"expected_runs": expected_runs, "tasks": task_results, "arms": arms, "winner": winner}
+    return {"expected_runs": expected_runs, "exploratory": expected_runs < 3, "tasks": task_results, "arms": arms, "winner": winner}
 
 
 def render_markdown(result: dict[str, object]) -> str:
     arms = result["arms"]
     assert isinstance(arms, dict)
     lines = [
-        "| Arm | Correctness gate | Median total tokens | vs baseline |",
+        "| Arm | Correctness gate | Median total tokens | " + ("vs baseline (exploratory)" if result["exploratory"] else "vs baseline") + " |",
         "| --- | --- | ---: | ---: |",
     ]
     for arm in ARMS:
@@ -169,7 +169,8 @@ def render_markdown(result: dict[str, object]) -> str:
         delta_text = "—" if delta is None else f"{float(delta):+.2f}%"
         lines.append(f"| {arm} | {gate} | {tokens:g} | {delta_text} |")
     winner = result["winner"]
-    lines.extend(["", f"Winner: {winner if winner is not None else 'none (correctness gate failed)'}"])
+    leader_label = "Provisional leader" if result["exploratory"] else "Winner"
+    lines.extend(["", f"{leader_label}: {winner if winner is not None else 'none (correctness gate failed)'}"])
     return "\n".join(lines)
 
 
@@ -178,7 +179,7 @@ def main() -> int:
         description="Score Sippion efficiency runs using correctness gates and total tokens."
     )
     parser.add_argument("input", type=Path, help="JSONL benchmark results")
-    parser.add_argument("--runs", type=int, default=5, help="required runs per task/arm")
+    parser.add_argument("--runs", type=int, default=1, help="required runs per task/arm (default: exploratory 1)")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     args = parser.parse_args()
 
