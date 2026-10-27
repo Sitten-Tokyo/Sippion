@@ -15,7 +15,7 @@ def row(task: str, arm: str, run: int, total: int, correct: bool = True) -> str:
 
 
 class ScoreTests(unittest.TestCase):
-    def test_single_run_is_exploratory_and_retains_correctness_gate(self) -> None:
+    def test_single_run_comparison_is_always_exploratory(self) -> None:
         lines = [
             row("task-a", arm, 1, 100 if arm == "baseline" else 80)
             for arm in score.ARMS
@@ -26,27 +26,10 @@ class ScoreTests(unittest.TestCase):
         self.assertIn("Provisional leader", score.render_markdown(result))
         self.assertIn("exploratory", score.render_markdown(result))
 
-    def test_replicated_comparison_is_not_labeled_provisional(self) -> None:
-        lines = [
-            row("task-a", arm, run, 100)
-            for arm in score.ARMS for run in range(1, 4)
-        ]
-        result = score.analyze(score.parse_runs(lines), 3)
-        self.assertFalse(result["exploratory"])
-        self.assertIn("Winner:", score.render_markdown(result))
-
-    def test_correct_arm_with_fewer_tokens_wins(self) -> None:
-        lines = []
-        totals = {
-            "baseline": 100,
-            "retrieval": 90,
-            "minimal-build": 80,
-            "full": 70,
-        }
-        for arm, total in totals.items():
-            for run in range(1, 6):
-                lines.append(row("task-a", arm, run, total + run - 3))
-        result = score.analyze(score.parse_runs(lines), 5)
+    def test_correct_arm_with_fewer_tokens_is_provisional_leader(self) -> None:
+        totals = {"baseline": 100, "retrieval": 90, "minimal-build": 80, "full": 70}
+        lines = [row("task-a", arm, 1, total) for arm, total in totals.items()]
+        result = score.analyze(score.parse_runs(lines))
         self.assertEqual(result["winner"], "full")
         self.assertEqual(result["arms"]["full"]["median_task_tokens"], 70)
         self.assertAlmostEqual(result["arms"]["full"]["vs_baseline_percent"], -30.0)
@@ -68,35 +51,29 @@ class ScoreTests(unittest.TestCase):
             ])
 
     def test_correctness_failure_disqualifies_lower_token_arm(self) -> None:
-        lines = []
-        for arm in score.ARMS:
-            for run in range(1, 6):
-                correct = not (arm == "full" and run == 3)
-                lines.append(row("task-a", arm, run, 50 if arm == "full" else 100, correct))
-        result = score.analyze(score.parse_runs(lines), 5)
+        lines = [
+            row("task-a", arm, 1, 50 if arm == "full" else 100, arm != "full")
+            for arm in score.ARMS
+        ]
+        result = score.analyze(score.parse_runs(lines))
         self.assertFalse(result["arms"]["full"]["eligible"])
         self.assertIsNone(result["arms"]["full"]["vs_baseline_percent"])
         self.assertNotEqual(result["winner"], "full")
 
-    def test_missing_run_fails_closed(self) -> None:
-        lines = []
-        for arm in score.ARMS:
-            limit = 4 if arm == "retrieval" else 5
-            for run in range(1, limit + 1):
-                lines.append(row("task-a", arm, run, 100))
-        with self.assertRaisesRegex(ValueError, "expected 5 runs"):
-            score.analyze(score.parse_runs(lines), 5)
+    def test_missing_arm_fails_closed(self) -> None:
+        lines = [row("task-a", arm, 1, 100) for arm in score.ARMS if arm != "retrieval"]
+        with self.assertRaisesRegex(ValueError, "expected 1 run, found 0"):
+            score.analyze(score.parse_runs(lines))
 
-    def test_duplicate_run_id_fails_closed(self) -> None:
-        lines = []
-        for arm in score.ARMS:
-            run_ids = [1, 2, 3, 4, 5]
-            if arm == "full":
-                run_ids[-1] = 4
-            for run in run_ids:
-                lines.append(row("task-a", arm, run, 100))
-        with self.assertRaisesRegex(ValueError, "duplicate run id"):
-            score.analyze(score.parse_runs(lines), 5)
+    def test_duplicate_execution_fails_closed(self) -> None:
+        lines = [row("task-a", arm, 1, 100) for arm in score.ARMS]
+        lines.append(row("task-a", "full", 1, 100))
+        with self.assertRaisesRegex(ValueError, "duplicate or extra execution"):
+            score.analyze(score.parse_runs(lines))
+
+    def test_repeated_run_number_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "run must be 1"):
+            score.parse_runs([row("task-a", "baseline", 2, 100)])
 
 
 if __name__ == "__main__":
