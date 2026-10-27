@@ -338,7 +338,10 @@ def codex_command(
         "exec",
         "--json",
         "--ephemeral",
-        "--dangerously-bypass-approvals-and-sandbox",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
         "--color",
         "never",
         "--cd",
@@ -399,6 +402,10 @@ def parse_codex_usage(lines: Iterable[str]) -> Usage:
             cache_tokens = _non_negative_int(
                 details["cached_tokens"],
                 "turn.completed usage.input_tokens_details.cached_tokens",
+            )
+        if cache_tokens > input_tokens:
+            raise PilotError(
+                f"turn.completed line {line_number} cached input exceeds input tokens"
             )
         total_input += input_tokens
         total_cache += cache_tokens
