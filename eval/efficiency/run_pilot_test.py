@@ -49,21 +49,37 @@ def pilot_manifest() -> dict[str, object]:
     ]
     for index, category in enumerate(categories):
         tasks[index % len(tasks)]["categories"].append(category)
-    return {"version": 1, "default_runs": 5, "tasks": tasks}
+    return {"version": 1, "default_runs": 1, "tasks": tasks}
 
 
 class RunnerTests(unittest.TestCase):
     def test_manifest_validation_and_matrix(self) -> None:
         tasks = run_pilot.validate_manifest(pilot_manifest())
         self.assertEqual(len(tasks), 12)
-        executions = run_pilot.expand_executions(tasks, 5)
-        self.assertEqual(len(executions), 240)
+        executions = run_pilot.expand_executions(tasks, run_pilot.DEFAULT_RUNS)
+        self.assertEqual(len(executions), 48)
         self.assertEqual(
             len({run_pilot.execution_key(item["task"], item["arm"], item["run"]) for item in executions}),
-            240,
+            48,
         )
-        with self.assertRaisesRegex(run_pilot.PilotError, "between 1 and 5"):
-            run_pilot.expand_executions(tasks, 6)
+        self.assertEqual(len(run_pilot.expand_executions(tasks, 3)), 144)
+        with self.assertRaisesRegex(run_pilot.PilotError, "between 1 and 3"):
+            run_pilot.expand_executions(tasks, 4)
+
+    def test_cli_defaults_to_small_pilot(self) -> None:
+        args = run_pilot.parse_args([])
+        self.assertEqual(args.runs, 1)
+
+    def test_resume_rejects_extra_runs_from_larger_experiment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(json.dumps({
+                "task": "python-01", "arm": "baseline", "run": 2,
+                "input_tokens": 5, "output_tokens": 1,
+                "cache_read_tokens": 0, "correctness": True,
+            }) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(run_pilot.PilotError, "exceeds configured run count"):
+                run_pilot.load_results(path, {"python-01"}, max_run=1)
 
     def test_duplicate_task_id_rejected(self) -> None:
         document = pilot_manifest()
