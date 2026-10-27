@@ -29,7 +29,7 @@ jobs:
           fi
 
       - name: Install pinned Codex CLI
-        run: |
+        run: | # zizmor: ignore[adhoc-packages] Version-pinned one-off CLI; Rust repo has no npm lockfile.
           npm install --global @openai/codex@0.164.0
           codex --version
 
