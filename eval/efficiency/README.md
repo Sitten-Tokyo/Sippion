@@ -128,6 +128,7 @@ task medians. An arm is eligible only when every run for every task passes the
 correctness gate. Lower token use cannot compensate for a failed verifier.
 
 The pilot is fixed at 48 executions: exactly one run for each task/arm pair.
+The scorer refuses incomplete matrices (fewer than 12 tasks or missing/extra arms).
 There is no repetition setting in the manifest, runner, or scorer. A single
 run cannot measure run-to-run variance. The scorer labels the leading arm
 *provisional*; percentage differences are exploratory, not proven performance
