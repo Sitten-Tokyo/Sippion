@@ -15,6 +15,26 @@ def row(task: str, arm: str, run: int, total: int, correct: bool = True) -> str:
 
 
 class ScoreTests(unittest.TestCase):
+    def test_single_run_is_exploratory_and_retains_correctness_gate(self) -> None:
+        lines = [
+            row("task-a", arm, 1, 100 if arm == "baseline" else 80)
+            for arm in score.ARMS
+        ]
+        result = score.analyze(score.parse_runs(lines))
+        self.assertEqual(result["expected_runs"], 1)
+        self.assertTrue(result["exploratory"])
+        self.assertIn("Provisional leader", score.render_markdown(result))
+        self.assertIn("exploratory", score.render_markdown(result))
+
+    def test_replicated_comparison_is_not_labeled_provisional(self) -> None:
+        lines = [
+            row("task-a", arm, run, 100)
+            for arm in score.ARMS for run in range(1, 4)
+        ]
+        result = score.analyze(score.parse_runs(lines), 3)
+        self.assertFalse(result["exploratory"])
+        self.assertIn("Winner:", score.render_markdown(result))
+
     def test_correct_arm_with_fewer_tokens_wins(self) -> None:
         lines = []
         totals = {
