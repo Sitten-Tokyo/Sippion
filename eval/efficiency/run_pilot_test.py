@@ -120,8 +120,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(30, 6, 8))
 
     def test_codex_jsonl_nested_cache_field_is_supported(self) -> None:
-        lines = [json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "input_tokens_details": {"cached_tokens": 2}, "output_tokens": 3}})]
-        self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(1, 2, 3))
+        lines = [json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "input_tokens_details": {"cached_tokens": 2}, "output_tokens": 3}})]
+        self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(3, 2, 3))
+
+    def test_codex_command_is_workspace_sandboxed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = run_pilot.create_isolated_run(root, "python-01", "baseline", 1)
+            args = run_pilot.codex_command("codex", run, "Implement task")
+            self.assertEqual(args[args.index("--sandbox") + 1], "workspace-write")
+            self.assertEqual(args[args.index("--ask-for-approval") + 1], "never")
+            self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
+
+    def test_cache_usage_cannot_exceed_input(self) -> None:
+        lines = [json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 2, "cached_input_tokens": 3, "output_tokens": 1},
+        })]
+        with self.assertRaisesRegex(run_pilot.PilotError, "cached input exceeds"):
+            run_pilot.parse_codex_usage(lines)
 
     def test_missing_usage_and_malformed_json_rejected(self) -> None:
         with self.assertRaisesRegex(run_pilot.PilotError, "missing usage"):
