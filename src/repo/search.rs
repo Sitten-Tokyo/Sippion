@@ -355,6 +355,7 @@ impl RepositoryAccess {
                     (CONTENT_MATCH_BASE_SCORE + matched * 10 + candidate.path_bonus * 3) as f64
                         + bm25 * 12.0
                         + coding_source_prior(&candidate.relative_path)
+                        + query_named_implementation_prior(&candidate.relative_path, terms)
                         + memory_bonus;
             } else {
                 candidate.score = (candidate.path_bonus * 3) as f64 + memory_bonus.min(4.0);
