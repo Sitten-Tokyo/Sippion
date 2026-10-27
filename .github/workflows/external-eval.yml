@@ -3,6 +3,11 @@ name: External retrieval evaluation
 on:
   pull_request:
     paths:
+      - 'src/repo/**'
+      - 'src/service/**'
+      - 'src/core.rs'
+      - 'src/hybrid.rs'
+      - 'src/syntax.rs'
       - 'eval/external_repos.json'
       - 'scripts/external-retrieval-eval.py'
       - '.github/workflows/external-eval.yml'
