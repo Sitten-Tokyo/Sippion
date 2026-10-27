@@ -37,8 +37,7 @@ RESULT_FIELDS = frozenset(
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{40}$")
 TASK_ID_RE = re.compile(r"^[a-z0-9]+-[0-9]{2}$")
-DEFAULT_RUNS = 1
-MAX_RUNS = 3
+PILOT_RUN = 1
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_OUTPUT = Path("eval/efficiency/results.jsonl")
 DEFAULT_MANIFEST = Path(__file__).with_name("tasks.json")
@@ -181,9 +180,8 @@ def validate_manifest(document: object, *, require_pilot_matrix: bool = True) ->
         raise PilotError("manifest must be a JSON object")
     if document.get("version") != 1:
         raise PilotError("manifest version must be 1")
-    default_runs = document.get("default_runs")
-    if default_runs != DEFAULT_RUNS:
-        raise PilotError(f"manifest default_runs must be {DEFAULT_RUNS}")
+    if "default_runs" in document:
+        raise PilotError("manifest must not configure repetitions (fixed one run per task/arm)")
     tasks = document.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         raise PilotError("manifest tasks must be a non-empty array")
@@ -242,12 +240,9 @@ def execution_key(task_id: str, arm: str, run: int) -> tuple[str, str, int]:
 
 def expand_executions(
     tasks: Sequence[Mapping[str, Any]],
-    runs: int,
     task_filter: str | None = None,
     arm_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    if runs < 1 or runs > MAX_RUNS:
-        raise PilotError(f"runs must be between 1 and {MAX_RUNS}")
     if arm_filter is not None and arm_filter not in ARMS:
         raise PilotError(f"unknown arm: {arm_filter}")
     selected_tasks = [task for task in tasks if task_filter is None or task["id"] == task_filter]
@@ -255,10 +250,9 @@ def expand_executions(
         raise PilotError(f"unknown task: {task_filter}")
     selected_arms = [arm_filter] if arm_filter else list(ARMS)
     executions = [
-        {"task": task["id"], "arm": arm, "run": run}
+        {"task": task["id"], "arm": arm, "run": PILOT_RUN}
         for task in selected_tasks
         for arm in selected_arms
-        for run in range(1, runs + 1)
     ]
     keys = [execution_key(item["task"], item["arm"], item["run"]) for item in executions]
     if len(keys) != len(set(keys)):
@@ -682,8 +676,8 @@ def _validate_result_row(row: object, line_number: int, task_ids: set[str]) -> d
     if arm not in ARMS:
         raise PilotError(f"result line {line_number}.arm is invalid")
     run = _non_negative_int(row["run"], f"result line {line_number}.run")
-    if run < 1:
-        raise PilotError(f"result line {line_number}.run must be positive")
+    if run != PILOT_RUN:
+        raise PilotError(f"result line {line_number}.run must be {PILOT_RUN} (fixed pilot)")
     for field in ("input_tokens", "output_tokens", "cache_read_tokens"):
         _non_negative_int(row[field], f"result line {line_number}.{field}")
     if not isinstance(row["correctness"], bool):
@@ -694,8 +688,6 @@ def _validate_result_row(row: object, line_number: int, task_ids: set[str]) -> d
 def load_results(
     path: Path,
     task_ids: set[str],
-    *,
-    max_run: int = DEFAULT_RUNS,
 ) -> dict[tuple[str, str, int], dict[str, Any]]:
     if not path.exists():
         return {}
@@ -712,8 +704,6 @@ def load_results(
         except json.JSONDecodeError as error:
             raise PilotError(f"result line {line_number} is invalid JSON") from error
         normalized = _validate_result_row(row, line_number, task_ids)
-        if normalized["run"] > max_run:
-            raise PilotError(f"result line {line_number}.run exceeds configured run count")
         key = execution_key(normalized["task"], normalized["arm"], normalized["run"])
         if key in results:
             raise PilotError(f"duplicate result execution: {key[0]}/{key[1]}/{key[2]}")
@@ -775,7 +765,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--task")
     parser.add_argument("--arm", choices=ARMS)
-    parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--model", default=None)
     parser.add_argument("--sippion-binary", type=Path, default=None)
@@ -792,9 +781,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         tasks = load_manifest(args.manifest)
-        executions = expand_executions(tasks, args.runs, args.task, args.arm)
+        executions = expand_executions(tasks, args.task, args.arm)
         task_ids = {task["id"] for task in tasks}
-        existing = load_results(args.output, task_ids, max_run=args.runs)
+        existing = load_results(args.output, task_ids)
         if args.dry_run:
             print(
                 json.dumps(
