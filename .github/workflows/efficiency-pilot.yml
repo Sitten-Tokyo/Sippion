@@ -49,7 +49,9 @@ jobs:
 
       - name: Score pilot
         if: always() && hashFiles('eval/efficiency/results.jsonl') != ''
-        run: python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json | tee eval/efficiency/score.json
+        run: |
+          set -o pipefail
+          python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json | tee eval/efficiency/score.json
 
       - name: Upload pilot results
         if: always()
