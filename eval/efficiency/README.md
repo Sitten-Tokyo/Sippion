@@ -25,6 +25,9 @@ Each task runs once under each arm (48 executions total, down from 240):
 3. `minimal-build`: retrieval plus the smallest-correct-solution rule.
 4. `full`: retrieval plus the complete managed efficiency rule.
 
+Retrieval arms require the Sippion MCP server to start successfully; a missing
+server is an error, not a silent fallback to the baseline.
+
 The runner uses Codex `workspace-write` sandboxing with approval disabled,
 not the no-sandbox bypass. Its setup and verifier commands still execute
 external code: run the pilot only in disposable, isolated CI runners or other
@@ -33,6 +36,9 @@ trusted OS-level isolation.
 The runner writes each run in a fresh checkout, private HOME/cache/temp
 directories, and temporary `CODEX_HOME`. It checks out the manifest commit
 before setup and never changes the user's global Codex configuration.
+Host credentials are excluded from Git, setup, and verifier environments by a
+small runtime allowlist; the API key is restored only for the Codex process.
+This reduces secret exposure but does not replace OS-level isolation.
 
 ## Prerequisites and authentication
 
