@@ -134,6 +134,26 @@ class RunnerTests(unittest.TestCase):
                 import shutil
                 shutil.rmtree(current.root)
 
+    def test_api_key_does_not_copy_local_login_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            auth_home = base / "signed-in"
+            auth_home.mkdir()
+            (auth_home / "auth.json").write_text('{"access_token":"private"}')
+            run = run_pilot.create_isolated_run(base, "python-01", "baseline", 1)
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}):
+                run_pilot.prepare_codex_home(
+                    run, "baseline", base / "sippion", source_codex_home=auth_home
+                )
+            self.assertFalse((run.codex_home / "auth.json").exists())
+
+    def test_repetition_cannot_be_forced_through_run_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(run_pilot.PilotError, "exactly one run"):
+                run_pilot.create_isolated_run(
+                    Path(directory), "python-01", "baseline", 2
+                )
+
     def test_untrusted_commands_never_inherit_host_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
