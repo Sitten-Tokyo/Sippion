@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "default_runs": 5,
   "notes": "Pinned real-OSS repositories. Setup is intentionally separate from the post-Codex deterministic verifier.",
   "tasks": [
     {

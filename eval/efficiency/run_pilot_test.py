@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import run_pilot
 import verify_task
@@ -49,21 +50,41 @@ def pilot_manifest() -> dict[str, object]:
     ]
     for index, category in enumerate(categories):
         tasks[index % len(tasks)]["categories"].append(category)
-    return {"version": 1, "default_runs": 5, "tasks": tasks}
+    return {"version": 1, "tasks": tasks}
 
 
 class RunnerTests(unittest.TestCase):
     def test_manifest_validation_and_matrix(self) -> None:
         tasks = run_pilot.validate_manifest(pilot_manifest())
         self.assertEqual(len(tasks), 12)
-        executions = run_pilot.expand_executions(tasks, 5)
-        self.assertEqual(len(executions), 240)
+        executions = run_pilot.expand_executions(tasks)
+        self.assertEqual(len(executions), 48)
         self.assertEqual(
             len({run_pilot.execution_key(item["task"], item["arm"], item["run"]) for item in executions}),
-            240,
+            48,
         )
-        with self.assertRaisesRegex(run_pilot.PilotError, "between 1 and 5"):
-            run_pilot.expand_executions(tasks, 6)
+        self.assertEqual({item["run"] for item in executions}, {1})
+
+    def test_pilot_rejects_repetition_configuration(self) -> None:
+        manifest = pilot_manifest()
+        manifest["default_runs"] = 3
+        with self.assertRaisesRegex(run_pilot.PilotError, "must not configure repetitions"):
+            run_pilot.validate_manifest(manifest)
+
+    def test_cli_rejects_repetition_flag(self) -> None:
+        with self.assertRaises(SystemExit):
+            run_pilot.parse_args(["--runs", "3"])
+
+    def test_resume_rejects_non_pilot_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(json.dumps({
+                "task": "python-01", "arm": "baseline", "run": 2,
+                "input_tokens": 5, "output_tokens": 1,
+                "cache_read_tokens": 0, "correctness": True,
+            }) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(run_pilot.PilotError, "must be 1"):
+                run_pilot.load_results(path, {"python-01"})
 
     def test_duplicate_task_id_rejected(self) -> None:
         document = pilot_manifest()
@@ -83,6 +104,8 @@ class RunnerTests(unittest.TestCase):
             configs = {arm: run_pilot.arm_configuration(arm, binary) for arm in run_pilot.ARMS}
         self.assertEqual(configs["baseline"], ("", ""))
         self.assertIn("repo_context", configs["retrieval"][0])
+        self.assertIn("required = true", configs["retrieval"][0])
+        self.assertNotIn("required = true", configs["baseline"][0])
         self.assertIn("smallest correct", configs["minimal-build"][1])
         self.assertNotIn("Lead with the result", configs["minimal-build"][1])
         self.assertIn("Lead with the result", configs["full"][1])
@@ -111,6 +134,47 @@ class RunnerTests(unittest.TestCase):
                 import shutil
                 shutil.rmtree(current.root)
 
+    def test_api_key_does_not_copy_local_login_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            auth_home = base / "signed-in"
+            auth_home.mkdir()
+            (auth_home / "auth.json").write_text('{"access_token":"private"}')
+            run = run_pilot.create_isolated_run(base, "python-01", "baseline", 1)
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}):
+                run_pilot.prepare_codex_home(
+                    run, "baseline", base / "sippion", source_codex_home=auth_home
+                )
+            self.assertFalse((run.codex_home / "auth.json").exists())
+
+    def test_repetition_cannot_be_forced_through_run_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(run_pilot.PilotError, "exactly one run"):
+                run_pilot.create_isolated_run(
+                    Path(directory), "python-01", "baseline", 2
+                )
+
+    def test_untrusted_commands_never_inherit_host_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = run_pilot.create_isolated_run(root, "python-01", "baseline", 1)
+            secrets = {
+                "OPENAI_API_KEY": "sk-private-pilot-key",
+                "GITHUB_TOKEN": "github-private-token",
+                "AWS_SECRET_ACCESS_KEY": "aws-private-key",
+                "MY_CUSTOM_SECRET": "private-value",
+                "PATH": "/bin:/usr/bin",
+            }
+            with patch.dict(os.environ, secrets, clear=True):
+                env = run_pilot.isolated_environment(run)
+            self.assertEqual(env["PATH"], secrets["PATH"])
+            for secret_name in (
+                "OPENAI_API_KEY", "GITHUB_TOKEN",
+                "AWS_SECRET_ACCESS_KEY", "MY_CUSTOM_SECRET",
+            ):
+                self.assertNotIn(secret_name, env)
+            self.assertEqual(env["HOME"], str(run.root / "home"))
+
     def test_codex_jsonl_usage_sums_all_completed_turns(self) -> None:
         lines = [
             json.dumps({"type": "item.completed"}),
@@ -120,8 +184,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(30, 6, 8))
 
     def test_codex_jsonl_nested_cache_field_is_supported(self) -> None:
-        lines = [json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "input_tokens_details": {"cached_tokens": 2}, "output_tokens": 3}})]
-        self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(1, 2, 3))
+        lines = [json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "input_tokens_details": {"cached_tokens": 2}, "output_tokens": 3}})]
+        self.assertEqual(run_pilot.parse_codex_usage(lines), run_pilot.Usage(3, 2, 3))
+
+    def test_codex_command_is_workspace_sandboxed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = run_pilot.create_isolated_run(root, "python-01", "baseline", 1)
+            args = run_pilot.codex_command("codex", run, "Implement task")
+            self.assertEqual(args[args.index("--sandbox") + 1], "workspace-write")
+            self.assertEqual(args[args.index("--ask-for-approval") + 1], "never")
+            self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
+
+    def test_cache_usage_cannot_exceed_input(self) -> None:
+        lines = [json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 2, "cached_input_tokens": 3, "output_tokens": 1},
+        })]
+        with self.assertRaisesRegex(run_pilot.PilotError, "cached input exceeds"):
+            run_pilot.parse_codex_usage(lines)
 
     def test_missing_usage_and_malformed_json_rejected(self) -> None:
         with self.assertRaisesRegex(run_pilot.PilotError, "missing usage"):

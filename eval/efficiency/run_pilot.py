@@ -37,7 +37,7 @@ RESULT_FIELDS = frozenset(
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{40}$")
 TASK_ID_RE = re.compile(r"^[a-z0-9]+-[0-9]{2}$")
-DEFAULT_RUNS = 5
+PILOT_RUN = 1
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_OUTPUT = Path("eval/efficiency/results.jsonl")
 DEFAULT_MANIFEST = Path(__file__).with_name("tasks.json")
@@ -180,9 +180,8 @@ def validate_manifest(document: object, *, require_pilot_matrix: bool = True) ->
         raise PilotError("manifest must be a JSON object")
     if document.get("version") != 1:
         raise PilotError("manifest version must be 1")
-    default_runs = document.get("default_runs")
-    if default_runs != DEFAULT_RUNS:
-        raise PilotError(f"manifest default_runs must be {DEFAULT_RUNS}")
+    if "default_runs" in document:
+        raise PilotError("manifest must not configure repetitions (fixed one run per task/arm)")
     tasks = document.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         raise PilotError("manifest tasks must be a non-empty array")
@@ -241,12 +240,9 @@ def execution_key(task_id: str, arm: str, run: int) -> tuple[str, str, int]:
 
 def expand_executions(
     tasks: Sequence[Mapping[str, Any]],
-    runs: int,
     task_filter: str | None = None,
     arm_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    if runs < 1 or runs > DEFAULT_RUNS:
-        raise PilotError(f"runs must be between 1 and {DEFAULT_RUNS}")
     if arm_filter is not None and arm_filter not in ARMS:
         raise PilotError(f"unknown arm: {arm_filter}")
     selected_tasks = [task for task in tasks if task_filter is None or task["id"] == task_filter]
@@ -254,10 +250,9 @@ def expand_executions(
         raise PilotError(f"unknown task: {task_filter}")
     selected_arms = [arm_filter] if arm_filter else list(ARMS)
     executions = [
-        {"task": task["id"], "arm": arm, "run": run}
+        {"task": task["id"], "arm": arm, "run": PILOT_RUN}
         for task in selected_tasks
         for arm in selected_arms
-        for run in range(1, runs + 1)
     ]
     keys = [execution_key(item["task"], item["arm"], item["run"]) for item in executions]
     if len(keys) != len(set(keys)):
@@ -280,6 +275,7 @@ def arm_configuration(arm: str, sippion_binary: Path) -> tuple[str, str]:
         'args = ["mcp", "--root-auto"]\n'
         'cwd = "."\n'
         'enabled_tools = ["repo_context"]\n'
+        "required = true\n"
     )
     if arm == "retrieval":
         return config, ""
@@ -289,8 +285,8 @@ def arm_configuration(arm: str, sippion_binary: Path) -> tuple[str, str]:
 
 
 def create_isolated_run(base_dir: Path, task_id: str, arm: str, run: int) -> IsolatedRun:
-    if run < 1:
-        raise PilotError("run must be positive")
+    if run != PILOT_RUN:
+        raise PilotError("pilot supports exactly one run per task and arm")
     root = Path(tempfile.mkdtemp(prefix=f"sippion-pilot-{task_id}-{arm}-{run}-", dir=base_dir))
     repository = root / "repository"
     codex_home = root / "codex-home"
@@ -311,6 +307,10 @@ def prepare_codex_home(
     (run.codex_home / "config.toml").write_text(config, encoding="utf-8")
     if rules:
         (run.codex_home / "AGENTS.md").write_text(rules, encoding="utf-8")
+
+    # API-key authentication does not require copying a local login session.
+    if os.environ.get("OPENAI_API_KEY"):
+        return
 
     source = source_codex_home
     if source is None:
@@ -338,7 +338,10 @@ def codex_command(
         "exec",
         "--json",
         "--ephemeral",
-        "--dangerously-bypass-approvals-and-sandbox",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
         "--color",
         "never",
         "--cd",
@@ -400,6 +403,10 @@ def parse_codex_usage(lines: Iterable[str]) -> Usage:
                 details["cached_tokens"],
                 "turn.completed usage.input_tokens_details.cached_tokens",
             )
+        if cache_tokens > input_tokens:
+            raise PilotError(
+                f"turn.completed line {line_number} cached input exceeds input tokens"
+            )
         total_input += input_tokens
         total_cache += cache_tokens
         total_output += output_tokens
@@ -452,10 +459,24 @@ def run_external(
         raise PilotError(f"could not run command {argv[0]}: {error}") from error
 
 
-def isolated_environment(run: IsolatedRun) -> dict[str, str]:
-    """Give each setup, model, and verifier process private mutable state."""
+# Do not forward the host's credentials (including OPENAI_API_KEY) to
+# untrusted repository setup code or the task verifier. A limited list of
+# non-secret runtime settings is sufficient for the pinned OSS pilot.
+RUNTIME_ENV_ALLOWLIST = (
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+    "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CI",
+    "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GIT_TERMINAL_PROMPT",
+)
 
-    environment = os.environ.copy()
+
+def isolated_environment(run: IsolatedRun) -> dict[str, str]:
+    """Give untrusted setup and verification processes private, scrubbed state."""
+
+    environment = {
+        key: value for key in RUNTIME_ENV_ALLOWLIST
+        if (value := os.environ.get(key)) is not None
+    }
     private_home = run.root / "home"
     private_cache = run.root / "cache"
     private_tmp = run.root / "tmp"
@@ -478,12 +499,18 @@ def isolated_environment(run: IsolatedRun) -> dict[str, str]:
     return environment
 
 
-def clone_at_revision(task: Mapping[str, Any], repository: Path, timeout_seconds: int) -> None:
+def clone_at_revision(
+    task: Mapping[str, Any],
+    repository: Path,
+    timeout_seconds: int,
+    env: Mapping[str, str],
+) -> None:
     source = task["repository"]
     url = source["url"]
     commit = source["commit"]
     repository.parent.mkdir(parents=True, exist_ok=True)
-    parent_env = os.environ.copy()
+    parent_env = dict(env)
+    parent_env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
     clone = run_external(
         [
             "git",
@@ -580,8 +607,8 @@ def run_one(
     timeout_seconds = task.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     isolated = create_isolated_run(temp_parent, task["id"], arm, run_number)
     try:
-        clone_at_revision(task, isolated.repository, timeout_seconds)
         setup_env = isolated_environment(isolated)
+        clone_at_revision(task, isolated.repository, timeout_seconds, setup_env)
         setup_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         setup_ok = _run_task_commands(
             task["setup"],
@@ -596,6 +623,10 @@ def run_one(
 
         prepare_codex_home(isolated, arm, sippion_binary)
         codex_env = isolated_environment(isolated)
+        # The model process needs its API credential; git, setup and verifier
+        # processes must never inherit it from the host environment.
+        if api_key := os.environ.get("OPENAI_API_KEY"):
+            codex_env["OPENAI_API_KEY"] = api_key
         codex_env["CODEX_HOME"] = str(isolated.codex_home)
         codex_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         command = codex_command(codex_binary, isolated, task["prompt"], model=model)
@@ -623,7 +654,7 @@ def run_one(
         if completed.returncode != 0:
             raise PilotError(f"Codex exited with status {completed.returncode}")
 
-        verify_env = os.environ.copy()
+        verify_env = isolated_environment(isolated)
         verify_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         verify_env["CODEX_OUTPUT_PATH"] = str(isolated.last_message)
         verifier_ok = _run_task_commands(
@@ -674,8 +705,8 @@ def _validate_result_row(row: object, line_number: int, task_ids: set[str]) -> d
     if arm not in ARMS:
         raise PilotError(f"result line {line_number}.arm is invalid")
     run = _non_negative_int(row["run"], f"result line {line_number}.run")
-    if run < 1:
-        raise PilotError(f"result line {line_number}.run must be positive")
+    if run != PILOT_RUN:
+        raise PilotError(f"result line {line_number}.run must be {PILOT_RUN} (fixed pilot)")
     for field in ("input_tokens", "output_tokens", "cache_read_tokens"):
         _non_negative_int(row[field], f"result line {line_number}.{field}")
     if not isinstance(row["correctness"], bool):
@@ -686,8 +717,6 @@ def _validate_result_row(row: object, line_number: int, task_ids: set[str]) -> d
 def load_results(
     path: Path,
     task_ids: set[str],
-    *,
-    max_run: int = DEFAULT_RUNS,
 ) -> dict[tuple[str, str, int], dict[str, Any]]:
     if not path.exists():
         return {}
@@ -704,8 +733,6 @@ def load_results(
         except json.JSONDecodeError as error:
             raise PilotError(f"result line {line_number} is invalid JSON") from error
         normalized = _validate_result_row(row, line_number, task_ids)
-        if normalized["run"] > max_run:
-            raise PilotError(f"result line {line_number}.run exceeds configured run count")
         key = execution_key(normalized["task"], normalized["arm"], normalized["run"])
         if key in results:
             raise PilotError(f"duplicate result execution: {key[0]}/{key[1]}/{key[2]}")
@@ -767,7 +794,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--task")
     parser.add_argument("--arm", choices=ARMS)
-    parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--model", default=None)
     parser.add_argument("--sippion-binary", type=Path, default=None)
@@ -784,9 +810,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         tasks = load_manifest(args.manifest)
-        executions = expand_executions(tasks, args.runs, args.task, args.arm)
+        executions = expand_executions(tasks, args.task, args.arm)
         task_ids = {task["id"] for task in tasks}
-        existing = load_results(args.output, task_ids, max_run=DEFAULT_RUNS)
+        existing = load_results(args.output, task_ids)
         if args.dry_run:
             print(
                 json.dumps(

@@ -213,7 +213,7 @@ Set `SIPPION_STRICT_PROVENANCE=1` on the bootstrap to additionally verify
 GitHub artifact attestations before anything runs:
 
 ```sh
-SIPPION_STRICT_PROVENANCE=1 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.sh | sh
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Sitten-Tokyo/Sippion/75d6b27e83b86bec00297cd5b5c05bb014e16904/scripts/bootstrap.sh | SIPPION_STRICT_PROVENANCE=1 sh
 ```
 
 ```powershell

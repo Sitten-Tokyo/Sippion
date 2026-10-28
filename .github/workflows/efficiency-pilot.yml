@@ -8,11 +8,9 @@ permissions:
 
 jobs:
   pilot:
-    name: Run pinned 240-execution Codex pilot
+    name: Run pinned 48-execution Codex pilot
     runs-on: ubuntu-24.04
     timeout-minutes: 1440
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -20,6 +18,8 @@ jobs:
           persist-credentials: false
 
       - name: Require Actions credential
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -27,6 +27,11 @@ jobs:
             echo "OPENAI_API_KEY Actions secret is required for the real pilot." >&2
             exit 1
           fi
+
+      - name: Install pinned Codex CLI
+        run: | # zizmor: ignore[adhoc-packages] Version-pinned one-off CLI; Rust repo has no npm lockfile.
+          npm install --global @openai/codex@0.164.0
+          codex --version
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
@@ -37,15 +42,18 @@ jobs:
         run: cargo build --release --locked
 
       - name: Run real Codex pilot
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python3 eval/efficiency/run_pilot.py \
-            --runs 5 \
             --output eval/efficiency/results.jsonl \
             --sippion-binary target/release/sippion
 
       - name: Score pilot
         if: always() && hashFiles('eval/efficiency/results.jsonl') != ''
-        run: python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json | tee eval/efficiency/score.json
+        run: |
+          set -o pipefail
+          python3 eval/efficiency/score.py eval/efficiency/results.jsonl --format json | tee eval/efficiency/score.json
 
       - name: Upload pilot results
         if: always()

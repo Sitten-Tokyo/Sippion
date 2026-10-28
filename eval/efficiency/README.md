@@ -18,22 +18,33 @@ The task categories cover bug fixes, features, refactors, reviews, dependency
 and abstraction temptations, both kinds of ambiguity, and security-sensitive
 work. Every verifier is deterministic; no LLM judge is used.
 
-Each task runs five times under each arm (240 executions total):
+Each task runs once under each arm (48 executions total, down from 240):
 
 1. `baseline`: no Sippion MCP and no Sippion rule.
 2. `retrieval`: only the `repo_context` MCP tool.
 3. `minimal-build`: retrieval plus the smallest-correct-solution rule.
 4. `full`: retrieval plus the complete managed efficiency rule.
 
+Retrieval arms require the Sippion MCP server to start successfully; a missing
+server is an error, not a silent fallback to the baseline.
+
+The runner uses Codex `workspace-write` sandboxing with approval disabled,
+not the no-sandbox bypass. Its setup and verifier commands still execute
+external code: run the pilot only in disposable, isolated CI runners or other
+trusted OS-level isolation.
+
 The runner writes each run in a fresh checkout, private HOME/cache/temp
 directories, and temporary `CODEX_HOME`. It checks out the manifest commit
 before setup and never changes the user's global Codex configuration.
+Host credentials are excluded from Git, setup, and verifier environments by a
+small runtime allowlist; the API key is restored only for the Codex process.
+This reduces secret exposure but does not replace OS-level isolation.
 
 ## Prerequisites and authentication
 
 - Python 3.10 or newer
 - Git
-- Codex CLI (`codex exec --json`)
+- Codex CLI (`codex exec --json`; the manual Actions workflow installs pinned version `0.164.0`)
 - A release Sippion binary for retrieval arms
 
 Authentication can come from an already authenticated local Codex CLI or from
@@ -58,24 +69,24 @@ output path:
 python3 eval/efficiency/run_pilot.py --dry-run
 ```
 
-The default report must show `12` tasks, `4` arms, `5` runs per task/arm, and
-`240` executions. A filtered dry-run is useful for checking one task or arm.
+The report must show `12` tasks, `4` arms, `1` run per task/arm, and
+`48` executions. A filtered dry-run is useful for checking one task or arm.
 
 ## Real Codex runs
 
-Run one smoke execution:
+Run a single smoke execution (one task and arm):
 
 ```sh
 python3 eval/efficiency/run_pilot.py \
-  --task rust-01 --arm baseline --runs 1 \
+  --task rust-01 --arm baseline \
   --sippion-binary target/release/sippion
 ```
 
-Run the full pilot:
+Run the complete 48-execution exploratory pilot:
 
 ```sh
 python3 eval/efficiency/run_pilot.py \
-  --runs 5 --output eval/efficiency/results.jsonl \
+  --output eval/efficiency/results.jsonl \
   --sippion-binary target/release/sippion
 ```
 
@@ -101,10 +112,12 @@ The runner parses every Codex JSONL `turn.completed` event and sums its usage
 for the session. It requires `input_tokens`, `output_tokens`, and cached-input
 usage (flat `cached_input_tokens` or nested
 `input_tokens_details.cached_tokens`). It never uses the first event alone and
-never guesses a missing field. The scorer's definition remains:
+never guesses a missing field. Cached input is a subset of input_tokens and
+is retained for diagnosis, not added again to the total. An impossible cache
+count larger than input_tokens is rejected. The scorer's definition remains:
 
 ```text
-total_tokens = input_tokens + output_tokens + cache_read_tokens
+total_tokens = input_tokens + output_tokens
 ```
 
 ## Scoring and correctness gate
@@ -120,6 +133,14 @@ The scorer takes the median total tokens per task/arm, then the median across
 task medians. An arm is eligible only when every run for every task passes the
 correctness gate. Lower token use cannot compensate for a failed verifier.
 
+The pilot is fixed at 48 executions: exactly one run for each task/arm pair.
+The scorer refuses incomplete matrices (fewer than 12 tasks or missing/extra arms).
+There is no repetition setting in the manifest, runner, or scorer. A single
+run cannot measure run-to-run variance. The scorer labels the leading arm
+*provisional*; percentage differences are exploratory, not proven performance
+improvements. Do not publish a statistically validated token-reduction claim
+from this pilot alone.
+
 ## Tests and CI
 
 No model call is made by these checks:
@@ -130,7 +151,7 @@ python3 eval/efficiency/run_pilot_test.py
 python3 eval/efficiency/run_pilot.py --dry-run
 ```
 
-Pull-request CI runs syntax checks, deterministic unit tests, and the 240-run
+Pull-request CI runs syntax checks, deterministic unit tests, and the 48-run
 dry-run only. The real pilot workflow is `workflow_dispatch` only and uploads
 the JSONL results as an artifact. It fails clearly when the Actions secret is
 missing.
