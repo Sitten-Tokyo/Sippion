@@ -275,6 +275,7 @@ def arm_configuration(arm: str, sippion_binary: Path) -> tuple[str, str]:
         'args = ["mcp", "--root-auto"]\n'
         'cwd = "."\n'
         'enabled_tools = ["repo_context"]\n'
+        "required = true\n"
     )
     if arm == "retrieval":
         return config, ""
@@ -454,10 +455,24 @@ def run_external(
         raise PilotError(f"could not run command {argv[0]}: {error}") from error
 
 
-def isolated_environment(run: IsolatedRun) -> dict[str, str]:
-    """Give each setup, model, and verifier process private mutable state."""
+# Do not forward the host's credentials (including OPENAI_API_KEY) to
+# untrusted repository setup code or the task verifier. A limited list of
+# non-secret runtime settings is sufficient for the pinned OSS pilot.
+RUNTIME_ENV_ALLOWLIST = (
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+    "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CI",
+    "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GIT_TERMINAL_PROMPT",
+)
 
-    environment = os.environ.copy()
+
+def isolated_environment(run: IsolatedRun) -> dict[str, str]:
+    """Give untrusted setup and verification processes private, scrubbed state."""
+
+    environment = {
+        key: value for key in RUNTIME_ENV_ALLOWLIST
+        if (value := os.environ.get(key)) is not None
+    }
     private_home = run.root / "home"
     private_cache = run.root / "cache"
     private_tmp = run.root / "tmp"
@@ -480,12 +495,18 @@ def isolated_environment(run: IsolatedRun) -> dict[str, str]:
     return environment
 
 
-def clone_at_revision(task: Mapping[str, Any], repository: Path, timeout_seconds: int) -> None:
+def clone_at_revision(
+    task: Mapping[str, Any],
+    repository: Path,
+    timeout_seconds: int,
+    env: Mapping[str, str],
+) -> None:
     source = task["repository"]
     url = source["url"]
     commit = source["commit"]
     repository.parent.mkdir(parents=True, exist_ok=True)
-    parent_env = os.environ.copy()
+    parent_env = dict(env)
+    parent_env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
     clone = run_external(
         [
             "git",
@@ -582,8 +603,8 @@ def run_one(
     timeout_seconds = task.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     isolated = create_isolated_run(temp_parent, task["id"], arm, run_number)
     try:
-        clone_at_revision(task, isolated.repository, timeout_seconds)
         setup_env = isolated_environment(isolated)
+        clone_at_revision(task, isolated.repository, timeout_seconds, setup_env)
         setup_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         setup_ok = _run_task_commands(
             task["setup"],
@@ -598,6 +619,10 @@ def run_one(
 
         prepare_codex_home(isolated, arm, sippion_binary)
         codex_env = isolated_environment(isolated)
+        # The model process needs its API credential; git, setup and verifier
+        # processes must never inherit it from the host environment.
+        if api_key := os.environ.get("OPENAI_API_KEY"):
+            codex_env["OPENAI_API_KEY"] = api_key
         codex_env["CODEX_HOME"] = str(isolated.codex_home)
         codex_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         command = codex_command(codex_binary, isolated, task["prompt"], model=model)
@@ -625,7 +650,7 @@ def run_one(
         if completed.returncode != 0:
             raise PilotError(f"Codex exited with status {completed.returncode}")
 
-        verify_env = os.environ.copy()
+        verify_env = isolated_environment(isolated)
         verify_env["SIPPION_TASK_ROOT"] = str(isolated.repository)
         verify_env["CODEX_OUTPUT_PATH"] = str(isolated.last_message)
         verifier_ok = _run_task_commands(
