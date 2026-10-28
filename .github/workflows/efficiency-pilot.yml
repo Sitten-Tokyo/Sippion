@@ -11,8 +11,6 @@ jobs:
     name: Run pinned 48-execution Codex pilot
     runs-on: ubuntu-24.04
     timeout-minutes: 1440
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -20,6 +18,8 @@ jobs:
           persist-credentials: false
 
       - name: Require Actions credential
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +42,8 @@ jobs:
         run: cargo build --release --locked
 
       - name: Run real Codex pilot
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python3 eval/efficiency/run_pilot.py \
             --output eval/efficiency/results.jsonl \
