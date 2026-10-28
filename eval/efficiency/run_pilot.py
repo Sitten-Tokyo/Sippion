@@ -285,8 +285,8 @@ def arm_configuration(arm: str, sippion_binary: Path) -> tuple[str, str]:
 
 
 def create_isolated_run(base_dir: Path, task_id: str, arm: str, run: int) -> IsolatedRun:
-    if run < 1:
-        raise PilotError("run must be positive")
+    if run != PILOT_RUN:
+        raise PilotError("pilot supports exactly one run per task and arm")
     root = Path(tempfile.mkdtemp(prefix=f"sippion-pilot-{task_id}-{arm}-{run}-", dir=base_dir))
     repository = root / "repository"
     codex_home = root / "codex-home"
@@ -307,6 +307,10 @@ def prepare_codex_home(
     (run.codex_home / "config.toml").write_text(config, encoding="utf-8")
     if rules:
         (run.codex_home / "AGENTS.md").write_text(rules, encoding="utf-8")
+
+    # API-key authentication does not require copying a local login session.
+    if os.environ.get("OPENAI_API_KEY"):
+        return
 
     source = source_codex_home
     if source is None:
