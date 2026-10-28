@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import run_pilot
 import verify_task
@@ -103,6 +104,8 @@ class RunnerTests(unittest.TestCase):
             configs = {arm: run_pilot.arm_configuration(arm, binary) for arm in run_pilot.ARMS}
         self.assertEqual(configs["baseline"], ("", ""))
         self.assertIn("repo_context", configs["retrieval"][0])
+        self.assertIn("required = true", configs["retrieval"][0])
+        self.assertNotIn("required = true", configs["baseline"][0])
         self.assertIn("smallest correct", configs["minimal-build"][1])
         self.assertNotIn("Lead with the result", configs["minimal-build"][1])
         self.assertIn("Lead with the result", configs["full"][1])
@@ -130,6 +133,27 @@ class RunnerTests(unittest.TestCase):
                 os.makedirs(current.root, exist_ok=True)
                 import shutil
                 shutil.rmtree(current.root)
+
+    def test_untrusted_commands_never_inherit_host_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = run_pilot.create_isolated_run(root, "python-01", "baseline", 1)
+            secrets = {
+                "OPENAI_API_KEY": "sk-private-pilot-key",
+                "GITHUB_TOKEN": "github-private-token",
+                "AWS_SECRET_ACCESS_KEY": "aws-private-key",
+                "MY_CUSTOM_SECRET": "private-value",
+                "PATH": "/bin:/usr/bin",
+            }
+            with patch.dict(os.environ, secrets, clear=True):
+                env = run_pilot.isolated_environment(run)
+            self.assertEqual(env["PATH"], secrets["PATH"])
+            for secret_name in (
+                "OPENAI_API_KEY", "GITHUB_TOKEN",
+                "AWS_SECRET_ACCESS_KEY", "MY_CUSTOM_SECRET",
+            ):
+                self.assertNotIn(secret_name, env)
+            self.assertEqual(env["HOME"], str(run.root / "home"))
 
     def test_codex_jsonl_usage_sums_all_completed_turns(self) -> None:
         lines = [
